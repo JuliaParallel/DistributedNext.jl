@@ -12,6 +12,8 @@ This documents notable changes in DistributedNext.jl. The format is based on
 ### Fixed
 - Fixed behaviour of `isempty(::RemoteChannel)`, which previously had the
   side-effect of taking an element from the channel ([#3]).
+- Improved thread-safety, such that it should be safe to start workers with
+  multiple threads and send messages between them ([#4]).
 
 ### Changed
 - Added a `project` argument to [`addprocs(::AbstractVector)`](@ref) to specify
