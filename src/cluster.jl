@@ -659,9 +659,9 @@ function create_worker(manager, wconfig)
         # require the value of config.connect_at which is set only upon connection completion
         for jw in PGRP.workers
             if (jw.id != 1) && (jw.id < w.id)
-                # wait for wl to join
-                if jw.state === W_CREATED
-                    lock(jw.c_state) do
+                lock(jw.c_state) do
+                    # wait for wl to join
+                    if jw.state === W_CREATED
                         wait(jw.c_state)
                     end
                 end
