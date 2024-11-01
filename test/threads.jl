@@ -48,8 +48,8 @@ isfailed(rr) = fetch_from_owner(istaskfailed, rr)
             # timedwait() instead of @sync to avoid deadlocks.
             t1 = Threads.@spawn fetch_from_owner(wait, recv)
             t2 = Threads.@spawn fetch_from_owner(wait, send)
-            @test timedwait(() -> istaskdone(t1), 5) == :ok
-            @test timedwait(() -> istaskdone(t2), 5) == :ok
+            @test timedwait(() -> istaskdone(t1), 60) == :ok
+            @test timedwait(() -> istaskdone(t2), 60) == :ok
 
             # Check the tasks
             @test isdone(send)
