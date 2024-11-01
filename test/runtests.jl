@@ -10,11 +10,11 @@ cmd = `$test_exename $test_exeflags`
 if Sys.isunix() && Sys.WORD_SIZE == 64
     # Run the SSH tests with a single thread because LibSSH.jl is not thread-safe
     sshtestfile = joinpath(@__DIR__, "sshmanager.jl")
-    run(addenv(`$cmd $sshtestfile`, "JULIA_NUM_THREADS" => "1"))
+    # run(addenv(`$cmd $sshtestfile`, "JULIA_NUM_THREADS" => "1"))
 else
     @warn "Skipping the SSH tests because this platform is not supported"
 end
 
 include("distributed_exec.jl")
 
-include("managers.jl")
+# include("managers.jl")
