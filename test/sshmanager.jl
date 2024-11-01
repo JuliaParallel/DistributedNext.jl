@@ -8,28 +8,24 @@ import LibSSH.Demo: DemoServer
 
 include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
 
-# LibSSH.jl currently only works on 64bit unixes
-if Sys.isunix() && Sys.WORD_SIZE == 64
-    function test_n_remove_pids(new_pids)
-        for p in new_pids
-            w_in_remote = sort(remotecall_fetch(workers, p))
-            try
-                @test intersect(new_pids, w_in_remote) == new_pids
-            catch
-                print("p       :     $p\n")
-                print("newpids :     $new_pids\n")
-                print("w_in_remote : $w_in_remote\n")
-                print("intersect   : $(intersect(new_pids, w_in_remote))\n\n\n")
-                rethrow()
-            end
+function test_n_remove_pids(new_pids)
+    for p in new_pids
+        w_in_remote = sort(remotecall_fetch(workers, p))
+        try
+            @test intersect(new_pids, w_in_remote) == new_pids
+        catch
+            print("p       :     $p\n")
+            print("newpids :     $new_pids\n")
+            print("w_in_remote : $w_in_remote\n")
+            print("intersect   : $(intersect(new_pids, w_in_remote))\n\n\n")
+            rethrow()
         end
-
-        remotecall_fetch(rmprocs, 1, new_pids)
     end
 
-    println("\n\nTesting SSHManager. A minimum of 4GB of RAM is recommended.")
-    println("Please ensure port 9300 and 2222 are not in use.")
+    remotecall_fetch(rmprocs, 1, new_pids)
+end
 
+@testset "SSHManager" begin
     DemoServer(2222; auth_methods=[ssh.AuthMethod_None], allow_auth_none=true, verbose=false, timeout=3600) do
         sshflags = `-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222 `
         #Issue #9951
