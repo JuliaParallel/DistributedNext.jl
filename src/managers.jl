@@ -2,6 +2,8 @@
 
 # Built-in SSH and Local Managers
 
+import Dates: now
+
 struct SSHManager <: ClusterManager
     machines::Dict
 
@@ -183,7 +185,7 @@ function launch(manager::SSHManager, params::Dict, launched::Array, launch_ntfy:
     # Wait for all launches to complete.
     @sync for (i, (machine, cnt)) in enumerate(manager.machines)
         let machine=machine, cnt=cnt
-             @async try
+            @async try
                 launch_on_machine(manager, $machine, $cnt, params, launched, launch_ntfy)
             catch e
                 print(stderr, "exception launching on machine $(machine) : $(e)\n")
@@ -767,7 +769,7 @@ function kill(manager::LocalManager, pid::Int, config::WorkerConfig; exit_timeou
 
         # Check to see if our child exited, and if not, send an actual kill signal
         if !process_exited(config.process)
-            @warn("Failed to gracefully kill worker $(pid), sending SIGQUIT")
+            @warn("$(now()) Failed to gracefully kill worker $(pid), sending SIGQUIT")
             kill(config.process, Base.SIGQUIT)
 
             sleep(term_timeout)
