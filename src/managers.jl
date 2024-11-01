@@ -2,6 +2,8 @@
 
 # Built-in SSH and Local Managers
 
+import Dates: now
+
 struct SSHManager <: ClusterManager
     machines::Dict
 
@@ -767,7 +769,7 @@ function kill(manager::LocalManager, pid::Int, config::WorkerConfig; exit_timeou
 
         # Check to see if our child exited, and if not, send an actual kill signal
         if !process_exited(config.process)
-            @warn("Failed to gracefully kill worker $(pid), sending SIGQUIT")
+            @warn("$(now()) Failed to gracefully kill worker $(pid), sending SIGQUIT")
             kill(config.process, Base.SIGQUIT)
 
             sleep(term_timeout)

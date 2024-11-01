@@ -1,5 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+import Dates: now
+
 # data stored by the owner of a remote reference
 def_rv_channel() = Channel(1)
 mutable struct RemoteValue
@@ -206,7 +208,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
             end
             readbytes!(r_stream, boundary, length(MSG_BOUNDARY))
 
-            println("got msg: ", typeof(msg))
+            println("$(now()) got msg: ", typeof(msg))
             handle_msg(msg, header, r_stream, w_stream, version)
         end
     catch e
