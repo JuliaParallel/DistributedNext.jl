@@ -3,12 +3,18 @@
 # Run the distributed test outside of the main driver since it needs its own
 # set of dedicated workers.
 include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
-disttestfile = joinpath(@__DIR__, "distributed_exec.jl")
 
-cmd = `$test_exename $test_exeflags $disttestfile`
+cmd = `$test_exename $test_exeflags`
 
-if !success(pipeline(cmd; stdout=stdout, stderr=stderr)) && ccall(:jl_running_on_valgrind,Cint,()) == 0
-    error("Distributed test failed, cmd : $cmd")
+# LibSSH.jl currently only works on 64bit unixes
+if Sys.isunix() && Sys.WORD_SIZE == 64
+    # Run the SSH tests with a single thread because LibSSH.jl is not thread-safe
+    sshtestfile = joinpath(@__DIR__, "sshmanager.jl")
+    run(addenv(`$cmd $sshtestfile`, "JULIA_NUM_THREADS" => "1"))
+else
+    @warn "Skipping the SSH tests because this platform is not supported"
 end
+
+include("distributed_exec.jl")
 
 include("managers.jl")
