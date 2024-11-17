@@ -277,7 +277,7 @@ end
         fstore = RemoteChannel(wid2)
 
         put!(fstore, rr)
-        @test remotecall_fetch(k -> haskey(DistributedNext.PGRP.refs, k), wid1, rrid) == true
+        @test timedwait(() -> remotecall_fetch(k -> haskey(DistributedNext.PGRP.refs, k), wid1, rrid), 10) == :ok
         finalize(rr) # finalize locally
         yield() # flush gc msgs
         @test remotecall_fetch(k -> haskey(DistributedNext.PGRP.refs, k), wid1, rrid) == true
