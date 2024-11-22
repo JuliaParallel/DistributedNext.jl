@@ -102,6 +102,7 @@ end
 hash(r::RRID, h::UInt) = hash(r.whence, hash(r.id, h))
 ==(r::RRID, s::RRID) = (r.whence==s.whence && r.id==s.id)
 
+include("network_interfaces.jl")
 include("clusterserialize.jl")
 include("cluster.jl")   # cluster setup and management, addprocs
 include("messages.jl")

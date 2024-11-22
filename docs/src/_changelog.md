@@ -18,3 +18,5 @@ This documents notable changes in DistributedNext.jl. The format is based on
 ### Changed
 - Added a `project` argument to [`addprocs(::AbstractVector)`](@ref) to specify
   the project of a remote worker ([#2]).
+- Workers will now attempt to pick the fastest available interface to
+  communicate over ([#9]).

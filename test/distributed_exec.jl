@@ -15,6 +15,11 @@ include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
 id_me = nothing
 id_other = nothing
 
+@testset "Network interface info" begin
+    # Smoke test
+    @test !isempty(DistributedNext._get_interfaces(; loopback=true))
+end
+
 # Test a few "remote" invocations when no workers are present
 @testset "Remote invocations with no workers" begin
     @test remote(myid)() == 1
