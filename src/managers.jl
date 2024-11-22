@@ -176,7 +176,7 @@ default_addprocs_params(::SSHManager) =
               :tunnel         => false,
               :multiplex      => false,
               :max_parallel   => 10,
-              :project        => Base.current_project()))
+              :project        => Base.active_project()))
 
 function launch(manager::SSHManager, params::Dict, launched::Array, launch_ntfy::Condition)
     # Launch one worker on each unique host in parallel. Additional workers are launched later.
