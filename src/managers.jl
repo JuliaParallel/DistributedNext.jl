@@ -138,9 +138,8 @@ addprocs([
 
 * `env`: provide an array of string pairs such as
   `env=["JULIA_DEPOT_PATH"=>"/depot"]` to request that environment variables
-  are set on the remote machine. By default only the environment variable
-  `JULIA_WORKER_TIMEOUT` is passed automatically from the local to the remote
-  environment.
+  are set on the remote machine. By default all `JULIA_*` environment variables
+  are passed automatically from the local to the remote environment.
 
 * `cmdline_cookie`: pass the authentication cookie via the `--worker` commandline
    option. The (more secure) default behaviour of passing the cookie via ssh stdio
@@ -294,8 +293,9 @@ function launch_on_machine(manager::SSHManager, machine::AbstractString, cnt, pa
     # Build up the ssh command
 
     # pass on some environment variables by default
-    for var in ["JULIA_WORKER_TIMEOUT"]
-        if !haskey(env, var) && haskey(ENV, var)
+    julia_vars = filter(startswith("JULIA_"), keys(ENV))
+    for var in julia_vars
+        if !haskey(env, var)
             env[var] = ENV[var]
         end
     end

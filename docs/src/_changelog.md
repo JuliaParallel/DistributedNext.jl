@@ -20,3 +20,5 @@ This documents notable changes in DistributedNext.jl. The format is based on
   the project of a remote worker ([#2]).
 - Workers will now attempt to pick the fastest available interface to
   communicate over ([#9]).
+- The `SSHManager` now passes all `JULIA_*` environment variables by default to
+  the workers, instead of only `JULIA_WORKER_TIMEOUT` ([#9]).

@@ -71,6 +71,13 @@ end
         test_n_remove_pids(new_pids)
         @test :ok == timedwait(()->!issocket(controlpath), 10.0; pollint=0.5)
 
+        print("\nTest SSH addprocs() passing environment variables\n")
+        withenv("JULIA_FOO" => "foo") do
+            new_pids = addprocs_with_testenv(["localhost"]; sshflags)
+            @test remotecall_fetch(() -> ENV["JULIA_FOO"], only(new_pids)) == "foo"
+            test_n_remove_pids(new_pids)
+        end
+
         print("\nAll supported formats for hostname\n")
         h1 = "localhost"
         user = ENV["USER"]
