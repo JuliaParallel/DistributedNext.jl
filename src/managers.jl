@@ -138,9 +138,8 @@ addprocs([
 
 * `env`: provide an array of string pairs such as
   `env=["JULIA_DEPOT_PATH"=>"/depot"]` to request that environment variables
-  are set on the remote machine. By default only the environment variable
-  `JULIA_WORKER_TIMEOUT` is passed automatically from the local to the remote
-  environment.
+  are set on the remote machine. By default all `JULIA_*` environment variables
+  are passed automatically from the local to the remote environment.
 
 * `cmdline_cookie`: pass the authentication cookie via the `--worker` commandline
    option. The (more secure) default behaviour of passing the cookie via ssh stdio
@@ -176,7 +175,7 @@ default_addprocs_params(::SSHManager) =
               :tunnel         => false,
               :multiplex      => false,
               :max_parallel   => 10,
-              :project        => Base.current_project()))
+              :project        => Base.active_project()))
 
 function launch(manager::SSHManager, params::Dict, launched::Array, launch_ntfy::Condition)
     # Launch one worker on each unique host in parallel. Additional workers are launched later.
@@ -186,7 +185,7 @@ function launch(manager::SSHManager, params::Dict, launched::Array, launch_ntfy:
             @async try
                 launch_on_machine(manager, $machine, $cnt, params, launched, launch_ntfy)
             catch e
-                print(stderr, "exception launching on machine $(machine) : $(e)\n")
+                @error "Exception launching on machine $(machine)" exception=(e, catch_backtrace())
             end
         end
     end
@@ -294,8 +293,9 @@ function launch_on_machine(manager::SSHManager, machine::AbstractString, cnt, pa
     # Build up the ssh command
 
     # pass on some environment variables by default
-    for var in ["JULIA_WORKER_TIMEOUT"]
-        if !haskey(env, var) && haskey(ENV, var)
+    julia_vars = filter(startswith("JULIA_"), keys(ENV))
+    for var in julia_vars
+        if !haskey(env, var)
             env[var] = ENV[var]
         end
     end

@@ -214,7 +214,7 @@ end
 mutable struct LocalProcess
     id::Int
     bind_addr::String
-    bind_port::UInt16
+    bind_port::Int
     cookie::String
     LocalProcess() = new(1)
 end
@@ -237,6 +237,11 @@ The function reads the cookie from stdin if required, and  listens on a free por
 tasks to process incoming TCP connections and requests. It also (optionally)
 closes stdin and redirects stderr to stdout.
 
+If a specific interface is not specified through `--bind-to` it will make a
+best-effort attempt to pick the fastest available network interface to listen
+on. The heuristics it uses for this depend on the system configuration and
+should not be relied upon to always pick the fastest interface.
+
 It does not return.
 """
 start_worker(cookie::AbstractString=readline(stdin); kwargs...) = start_worker(stdout, cookie; kwargs...)
@@ -253,8 +258,8 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
     interface = IPv4(LPROC.bind_addr)
     if LPROC.bind_port == 0
         port_hint = 9000 + (getpid() % 1000)
-        (port, sock) = listenany(interface, UInt16(port_hint))
-        LPROC.bind_port = port
+        (port, sock) = listenany(interface, port_hint)
+        LPROC.bind_port = Int(port)
     else
         sock = listen(interface, LPROC.bind_port)
     end
@@ -263,7 +268,7 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
         process_messages(client, client, true)
     end)
     print(out, "julia_worker:")  # print header
-    print(out, "$(string(LPROC.bind_port))#") # print port
+    print(out, "$(LPROC.bind_port)#") # print port
     print(out, LPROC.bind_addr)
     print(out, '\n')
     flush(out)
@@ -1308,17 +1313,33 @@ function init_bind_addr()
         end
     else
         bind_port = 0
-        try
-            bind_addr = string(getipaddr())
-        catch
-            # All networking is unavailable, initialize bind_addr to the loopback address
-            # Will cause an exception to be raised only when used.
+
+        interfaces = _get_interfaces(IPv4)
+        if isempty(interfaces)
+            # Include IPv6 interfaces if there are no IPv4 ones
+            interfaces = _get_interfaces()
+        end
+
+        if isempty(interfaces)
+            # All networking is unavailable, initialize bind_addr to the loopback address.
+            # An exception will be raised later if even that is unavailable.
             bind_addr = "127.0.0.1"
+        else
+            # Pick the interface with the highest negotiated speed, if any
+            interfaces_with_speed = filter(x -> !isnothing(x.speed), interfaces)
+            if isempty(interfaces_with_speed)
+                # If none of them report speed just pick the first one
+                bind_addr = string(interfaces[1].ip)
+            else
+                idx = findmax(x -> x.speed, interfaces)[2]
+                bind_addr = string(interfaces[idx].ip)
+            end
         end
     end
+
     global LPROC
     LPROC.bind_addr = bind_addr
-    LPROC.bind_port = UInt16(bind_port)
+    LPROC.bind_port = bind_port
 end
 
 using Random: randstring
