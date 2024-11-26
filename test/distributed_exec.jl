@@ -1,6 +1,6 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-using Test, DistributedNext, Random, Serialization, Sockets
+using DistributedNext, Random, Serialization, Sockets
 import DistributedNext: launch, manage
 
 

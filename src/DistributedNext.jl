@@ -72,6 +72,21 @@ export
 # Used only by shared arrays.
     check_same_host
 
+function _check_distributed_active()
+    # Find the Distributed module if it's been loaded
+    distributed_pkgid = Base.PkgId(Base.UUID("8ba89e20-285c-5b6f-9357-94700520ee1b"), "Distributed")
+    if !haskey(Base.loaded_modules, distributed_pkgid)
+        return false
+    end
+
+    if isdefined(Base.loaded_modules[distributed_pkgid].LPROC, :cookie) && inited[]
+        @warn "DistributedNext has detected that the Distributed stdlib may be in use. Be aware that these libraries are not compatible, you should use either one or the other."
+        return true
+    else
+        return false
+    end
+end
+
 function _require_callback(mod::Base.PkgId)
     if Base.toplevel_load[] && myid() == 1 && nprocs() > 1
         # broadcast top-level (e.g. from Main) import/using from node 1 (only)
@@ -116,6 +131,20 @@ include("precompile.jl")
 
 function __init__()
     init_parallel()
+
+    # Start a task to watch for the Distributed stdlib being loaded and
+    # initialized to support multiple workers. We do this by checking if the
+    # cluster cookie has been set, which is most likely to have been done
+    # through Distributed.init_multi() being called by Distributed.addprocs() or
+    # something.
+    watcher_task = Threads.@spawn while true
+        if _check_distributed_active()
+            return
+        end
+
+        sleep(1)
+    end
+    errormonitor(watcher_task)
 end
 
 end

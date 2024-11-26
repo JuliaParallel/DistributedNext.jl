@@ -1,5 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+using Test
+
 # Run the distributed test outside of the main driver since it needs its own
 # set of dedicated workers.
 include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
@@ -18,3 +20,5 @@ end
 include("distributed_exec.jl")
 
 include("managers.jl")
+
+include("distributed_stdlib_detection.jl")
