@@ -762,7 +762,7 @@ end
 # since they print errors. The test block is enabled by defining env
 # JULIA_TESTFULL=1.
 
-DoFullTest = Base.get_bool_env("JULIA_TESTFULL", false)
+DoFullTest = get(ENV, "JULIA_TESTFULL", "0") == "1"
 
 if DoFullTest
     println("Testing exception printing on remote worker from a `remote_do` call")
@@ -1435,7 +1435,11 @@ v2669=10
             thrown = true
             local b = IOBuffer()
             showerror(b, e)
-            @test occursin("sqrt was called with a negative real argument", String(take!(b)))
+            if VERSION < v"1.10"
+                @test occursin("sqrt will only return a complex result", String(take!(b)))
+            else
+                @test occursin("sqrt was called with a negative real argument", String(take!(b)))
+            end
         end
         @test thrown
     end

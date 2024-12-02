@@ -7,7 +7,7 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
-## Unreleased
+## [v1.0.0] - 2024-12-02
 
 ### Fixed
 - Fixed behaviour of `isempty(::RemoteChannel)`, which previously had the
