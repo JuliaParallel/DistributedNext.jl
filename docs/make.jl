@@ -34,6 +34,7 @@ makedocs(;
          sitename = "DistributedNext",
          pages = [
              "DistributedNext" => "index.md",
+             "support-preferences.md",
              "changelog.md"
          ],
          warnonly = [:missing_docs, :cross_references],
