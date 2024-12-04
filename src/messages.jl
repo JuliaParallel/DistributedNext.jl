@@ -42,6 +42,18 @@ struct ResultMsg <: AbstractMsg
     value::Any
 end
 
+# RemoteChannel messages
+
+struct RemoteChannelPutMsg <: AbstractMsg
+    rid::RRID
+    caller_id::Integer
+    values::Any
+end
+
+struct RemoteChannelTakeMsg <: AbstractMsg
+    rid::RRID
+    caller_id::Integer
+end
 
 # Worker initialization messages
 struct IdentifySocketMsg <: AbstractMsg
@@ -69,6 +81,7 @@ end
 
 const msgtypes = Any[CallWaitMsg, IdentifySocketAckMsg, IdentifySocketMsg,
                      JoinCompleteMsg, JoinPGRPMsg, RemoteDoMsg, ResultMsg,
+                     RemoteChannelPutMsg, RemoteChannelTakeMsg,
                      CallMsg{:call}, CallMsg{:call_fetch}]
 
 for (idx, tname) in enumerate(msgtypes)

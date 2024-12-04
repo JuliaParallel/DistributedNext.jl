@@ -717,9 +717,29 @@ end
 
 Store a set of values to the [`RemoteChannel`](@ref).
 If the channel is full, blocks until space is available.
-Return the first argument.
+Returns the channel `rr`.
 """
-put!(rr::RemoteChannel, args...) = (call_on_owner(put_ref, rr, myid(), args...); rr)
+function put!(rr::RemoteChannel, args...)
+    w = worker_from_id(rr.where)
+    put!(rr, w, args...)
+end
+
+function put!(rr::RemoteChannel, w::LocalProcess, args...)
+    put_ref(remoteref_id(rr), myid(), args...)
+end
+
+function put!(rr::RemoteChannel, w::Worker, args...)
+    oid = RRID()
+    rv = lookup_ref(oid)
+    rv.waitingfor = w.id
+    send_msg(w, MsgHeader(RRID(0, 0), oid), RemoteChannelPutMsg(remoteref_id(rr), myid(), args))
+    v = take!(rv)
+    lock(client_refs) do
+        delete!(PGRP.refs, oid)
+    end
+
+    return isa(v, RemoteException) ? throw(v) : rr
+end
 
 # take! is not supported on Future
 
@@ -753,12 +773,31 @@ function take_ref(rid, caller, args...)
 end
 
 """
-    take!(rr::RemoteChannel, args...)
+    take!(rr::RemoteChannel)
 
 Fetch value(s) from a [`RemoteChannel`](@ref) `rr`,
 removing the value(s) in the process.
 """
-take!(rr::RemoteChannel, args...) = call_on_owner(take_ref, rr, myid(), args...)::eltype(rr)
+function take!(rr::RemoteChannel)
+    take!(rr, worker_from_id(rr.where))
+end
+
+function take!(rr::RemoteChannel, w::LocalProcess)
+    take_ref(remoteref_id(rr), myid())
+end
+
+function take!(rr::RemoteChannel, w::Worker)
+    oid = RRID()
+    rv = lookup_ref(oid)
+    rv.waitingfor = w.id
+    send_msg(w, MsgHeader(RRID(0, 0), oid), RemoteChannelTakeMsg(remoteref_id(rr), myid()))
+    v = take!(rv)
+    lock(client_refs) do
+        delete!(PGRP.refs, oid)
+    end
+
+    return isa(v, RemoteException) ? throw(v) : v::eltype(rr)
+end
 
 # close and isopen are not supported on Future
 

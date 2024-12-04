@@ -93,7 +93,7 @@ end
 
 function deliver_result(sock::IO, msg, oid, value)
     #print("$(myid()) sending result $oid\n")
-    if msg === :call_fetch || isa(value, RemoteException)
+    if msg === :call_fetch || msg === :remotechannel_take || isa(value, RemoteException)
         val = value
     else
         val = :OK
@@ -312,6 +312,27 @@ end
 
 function handle_msg(msg::ResultMsg, header, r_stream, w_stream, version)
     put!(lookup_ref(header.response_oid), msg.value)
+end
+
+function handle_msg(msg::RemoteChannelPutMsg, header, r_stream, w_stream, version)
+    result = nothing
+    try
+        put_ref(msg.rid, msg.caller_id, msg.values...)
+    catch ex
+        result = ex
+    end
+
+    deliver_result(w_stream, :remotechannel_put, header.notify_oid, result)
+end
+
+function handle_msg(msg::RemoteChannelTakeMsg, header, r_stream, w_stream, version)
+    try
+        result = take_ref(msg.rid, msg.caller_id)
+        deliver_result(w_stream, :remotechannel_take, header.notify_oid, result)
+    catch ex
+        deliver_result(w_stream, :remotechannel_take, header.notify_oid, ex)
+    end
+
 end
 
 function handle_msg(msg::IdentifySocketMsg, header, r_stream, w_stream, version)
