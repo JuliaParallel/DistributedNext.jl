@@ -142,8 +142,14 @@ function __init__()
             if _check_distributed_active()
                 return
             end
-    
-            sleep(1)
+
+            try
+                sleep(1)
+            catch
+                # sleep() may throw when the internal object it waits on is closed
+                # as the process exits.
+                return
+            end
         end
         errormonitor(watcher_task)
     end
