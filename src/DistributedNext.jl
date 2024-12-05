@@ -132,19 +132,21 @@ include("precompile.jl")
 function __init__()
     init_parallel()
 
-    # Start a task to watch for the Distributed stdlib being loaded and
-    # initialized to support multiple workers. We do this by checking if the
-    # cluster cookie has been set, which is most likely to have been done
-    # through Distributed.init_multi() being called by Distributed.addprocs() or
-    # something.
-    watcher_task = Threads.@spawn while true
-        if _check_distributed_active()
-            return
+    if ccall(:jl_generating_output, Cint, ()) == 0
+        # Start a task to watch for the Distributed stdlib being loaded and
+        # initialized to support multiple workers. We do this by checking if the
+        # cluster cookie has been set, which is most likely to have been done
+        # through Distributed.init_multi() being called by Distributed.addprocs() or
+        # something.
+        watcher_task = Threads.@spawn while true
+            if _check_distributed_active()
+                return
+            end
+    
+            sleep(1)
         end
-
-        sleep(1)
+        errormonitor(watcher_task)
     end
-    errormonitor(watcher_task)
 end
 
 end
