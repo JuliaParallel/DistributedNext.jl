@@ -8,8 +8,8 @@ include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
 
 cmd = `$test_exename $test_exeflags`
 
-# LibSSH.jl currently only works on 64bit unixes
-if Sys.isunix() && Sys.WORD_SIZE == 64
+# LibSSH.jl currently only works on unixes
+if Sys.isunix()
     # Run the SSH tests with a single thread because LibSSH.jl is not thread-safe
     sshtestfile = joinpath(@__DIR__, "sshmanager.jl")
     run(addenv(`$cmd $sshtestfile`, "JULIA_NUM_THREADS" => "1"))
