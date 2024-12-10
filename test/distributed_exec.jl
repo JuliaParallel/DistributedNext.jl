@@ -1,6 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 using DistributedNext, Random, Serialization, Sockets
+import DistributedNext
 import DistributedNext: launch, manage
 
 
@@ -1932,6 +1933,75 @@ include("splitrange.jl")
             wait(rmprocs([w]))
         end
     end
+end
+
+@testset "Worker state callbacks" begin
+    rmprocs(other_workers())
+
+    # Adding a callback with an invalid signature should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(() -> nothing)
+
+    # Smoke test to ensure that all the callbacks are executed
+    starting_managers = []
+    started_workers = Int[]
+    exiting_workers = Int[]
+    exited_workers = []
+    starting_key = DistributedNext.add_worker_starting_callback((manager, kwargs) -> push!(starting_managers, manager))
+    started_key = DistributedNext.add_worker_started_callback(pid -> (push!(started_workers, pid); error("foo")))
+    exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> push!(exited_workers, (pid, state)))
+
+    # Test that the worker-started exception bubbles up
+    @test_throws TaskFailedException addprocs(1)
+
+    pid = only(workers())
+    @test only(starting_managers) isa DistributedNext.LocalManager
+    @test started_workers == [pid]
+    rmprocs(workers())
+    @test exiting_workers == [pid]
+    @test exited_workers == [(pid, DistributedNext.WorkerState_terminated)]
+
+    # Trying to reset an existing callback should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(Returns(nothing); key=started_key)
+
+    # Remove the callbacks
+    DistributedNext.remove_worker_starting_callback(starting_key)
+    DistributedNext.remove_worker_started_callback(started_key)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that the worker-exiting `callback_timeout` option works and that we
+    # get warnings about slow worker-started callbacks.
+    event = Base.Event()
+    callback_task = nothing
+    started_key = DistributedNext.add_worker_started_callback(_ -> sleep(0.5))
+    exiting_key = DistributedNext.add_worker_exiting_callback(_ -> (callback_task = current_task(); wait(event)))
+
+    @test_logs (:warn, r"Waiting for these worker-started callbacks.+") match_mode=:any addprocs(1; callback_warning_interval=0.05)
+    DistributedNext.remove_worker_started_callback(started_key)
+
+    @test_logs (:warn, r"Some worker-exiting callbacks have not yet finished.+") rmprocs(workers(); callback_timeout=0.5)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+
+    notify(event)
+    wait(callback_task)
+
+    # Test that the initial callbacks were indeed removed
+    @test length(starting_managers) == 1
+    @test length(started_workers) == 1
+    @test length(exiting_workers) == 1
+    @test length(exited_workers) == 1
+
+    # Test that workers that were killed forcefully are detected as such
+    exit_state = nothing
+    DistributedNext.add_worker_exited_callback((pid, state) -> exit_state = state)
+    pid = only(addprocs(1))
+
+    redirect_stderr(devnull) do
+        remote_do(exit, pid)
+        timedwait(() -> !isnothing(exit_state), 10)
+    end
+    @test exit_state == DistributedNext.WorkerState_exterminated
 end
 
 # Run topology tests last after removing all workers, since a given
