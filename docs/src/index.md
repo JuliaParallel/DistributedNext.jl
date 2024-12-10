@@ -52,6 +52,17 @@ DistributedNext.cluster_cookie()
 DistributedNext.cluster_cookie(::Any)
 ```
 
+## Callbacks
+
+```@docs
+DistributedNext.add_worker_added_callback
+DistributedNext.remove_worker_added_callback
+DistributedNext.add_worker_exiting_callback
+DistributedNext.remove_worker_exiting_callback
+DistributedNext.add_worker_exited_callback
+DistributedNext.remove_worker_exited_callback
+```
+
 ## Cluster Manager Interface
 
 This interface provides a mechanism to launch and manage Julia workers on different cluster environments.

@@ -1,6 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 using DistributedNext, Random, Serialization, Sockets
+import DistributedNext
 import DistributedNext: launch, manage
 
 
@@ -1932,6 +1933,47 @@ include("splitrange.jl")
             wait(rmprocs([w]))
         end
     end
+end
+
+@testset "Worker state callbacks" begin
+    if nprocs() > 1
+        rmprocs(workers())
+    end
+
+    # Smoke test to ensure that all the callbacks are executed
+    added_workers = Int[]
+    exiting_workers = Int[]
+    exited_workers = Int[]
+    added_key = DistributedNext.add_worker_added_callback(pid -> push!(added_workers, pid))
+    exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
+    exited_key = DistributedNext.add_worker_exited_callback(pid -> push!(exited_workers, pid))
+
+    pid = only(addprocs(1))
+    @test added_workers == [pid]
+    rmprocs(workers())
+    @test exiting_workers == [pid]
+    @test exited_workers == [pid]
+
+    # Remove the callbacks
+    DistributedNext.remove_worker_added_callback(added_key)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that the `callback_timeout` option works
+    event = Base.Event()
+    callback_task = nothing
+    exiting_key = DistributedNext.add_worker_exiting_callback(_ -> (callback_task = current_task(); wait(event)))
+    addprocs(1)
+
+    @test_logs (:warn, r"Some callbacks timed out.+") rmprocs(workers(); callback_timeout=0.5)
+
+    notify(event)
+    wait(callback_task)
+
+    # Test that the previous callbacks were indeed removed
+    @test length(added_workers) == 1
+    @test length(exiting_workers) == 1
+    @test length(exited_workers) == 1
 end
 
 # Run topology tests last after removing all workers, since a given

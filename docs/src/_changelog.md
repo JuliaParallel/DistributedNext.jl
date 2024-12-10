@@ -18,6 +18,7 @@ This documents notable changes in DistributedNext.jl. The format is based on
   incompatibilities from both libraries being used simultaneously ([#10]).
 - [`other_workers()`](@ref) and [`other_procs()`](@ref) were implemented and
   exported ([#18]).
+- Implemented callback support for workers being added/removed etc ([#17]).
 
 ## [v1.0.0] - 2024-12-02
 
