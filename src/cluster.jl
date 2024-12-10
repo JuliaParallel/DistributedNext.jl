@@ -1232,7 +1232,7 @@ function deregister_worker(pg, pid)
             # Notify the cluster manager of this workers death
             manage(w.manager, w.id, w.config, :deregister)
             if PGRP.topology !== :all_to_all || isclusterlazy()
-                for rpid in workers()
+                for rpid in other_workers()
                     try
                         remote_do(deregister_worker, rpid, pid)
                     catch
