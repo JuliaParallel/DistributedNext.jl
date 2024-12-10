@@ -25,7 +25,7 @@ jobs:
         version:
           - 'nightly'
           - '1'
-          - '1.9'
+          - '1.10'
         os:
           - ubuntu-latest
           - macOS-latest
@@ -36,8 +36,6 @@ jobs:
         exclude:
           - os: macOS-latest
             arch: x86
-          - os: windows-latest # Killing workers doesn't work on windows in 1.9
-            version: '1.9'
 
     steps:
       - uses: actions/checkout@v4

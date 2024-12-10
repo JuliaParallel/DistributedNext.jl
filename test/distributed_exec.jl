@@ -1,5 +1,6 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+import Revise
 using DistributedNext, Random, Serialization, Sockets
 import DistributedNext
 import DistributedNext: launch, manage
@@ -2003,6 +2004,69 @@ end
     end
     @test exit_state == DistributedNext.WorkerState_exterminated
 end
+
+# This is a simplified copy of a test from Revise.jl's tests
+@testset "Revise.jl integration" begin
+    function rm_precompile(pkgname::AbstractString)
+        filepath = Base.cache_file_entry(Base.PkgId(pkgname))
+        isa(filepath, Tuple) && (filepath = filepath[1]*filepath[2])  # Julia 1.3+
+        for depot in DEPOT_PATH
+            fullpath = joinpath(depot, filepath)
+            isfile(fullpath) && rm(fullpath)
+        end
+    end
+
+    pid = only(addprocs(1))
+
+    # Test that initialization succeeds by checking that Main.whichtt is defined
+    # on the worker, which is defined by Revise.init_worker().
+    @test timedwait(() ->remotecall_fetch(() -> hasproperty(Main, :whichtt), pid), 10) == :ok
+
+    tmpdir = mktempdir()
+    @everywhere push!(LOAD_PATH, $tmpdir)  # Don't want to share this LOAD_PATH
+
+    # Create a fake package
+    module_file = joinpath(tmpdir, "ReviseDistributed", "src", "ReviseDistributed.jl")
+    mkpath(dirname(module_file))
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = π
+          g(::Int) = 0
+
+          end
+          """)
+
+    # Check that we can use it
+    @everywhere using ReviseDistributed
+    for p in procs()
+        @test remotecall_fetch(ReviseDistributed.f, p)    == π
+        @test remotecall_fetch(ReviseDistributed.g, p, 1) == 0
+    end
+
+    # Test changing and deleting methods
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = 3.0
+
+          end
+          """)
+    Revise.revise()
+    for p in procs()
+        # We use timedwait() here because worker updates from Revise are asynchronous
+        @test timedwait(() -> remotecall_fetch(ReviseDistributed.f, p) == 3.0, 10) == :ok
+
+        @test_throws RemoteException remotecall_fetch(ReviseDistributed.g, p, 1)
+    end
+
+    rmprocs(workers())
+    rm_precompile("ReviseDistributed")
+    pop!(LOAD_PATH)
+end
+
 
 # Run topology tests last after removing all workers, since a given
 # cluster at any time only supports a single topology.
