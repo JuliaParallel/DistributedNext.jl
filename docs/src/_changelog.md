@@ -9,6 +9,9 @@ This documents notable changes in DistributedNext.jl. The format is based on
 
 ## Unreleased
 
+### Added
+- Implemented callback support for workers being added/removed etc ([#17]).
+
 ### Fixed
 - Modified the default implementations of methods like `take!` and `wait` on
   [`AbstractWorkerPool`](@ref) to be threadsafe and behave more consistently
