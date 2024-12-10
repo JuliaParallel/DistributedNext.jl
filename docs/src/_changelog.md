@@ -11,6 +11,7 @@ This documents notable changes in DistributedNext.jl. The format is based on
 
 ### Added
 - Implemented callback support for workers being added/removed etc ([#17]).
+- Added a package extension to support Revise.jl ([#17]).
 
 ## [v1.1.1] - 2026-03-09
 
