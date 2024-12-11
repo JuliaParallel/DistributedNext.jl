@@ -869,30 +869,20 @@ end
 
 # Callbacks
 
-# We define the callback methods in a loop here and add docstrings for them afterwards
-for callback_type in (:added, :exiting, :exited)
-    let add_name = Symbol(:add_worker_, callback_type, :_callback),
-        remove_name = Symbol(:remove_worker_, callback_type, :_callback),
-        dict_name = Symbol(:worker_, callback_type, :_callbacks)
-
-        @eval begin
-            function $add_name(f::Base.Callable; key=nothing)
-                if !hasmethod(f, Tuple{Int})
-                    throw(ArgumentError("Callback function is invalid, it must be able to accept a single Int argument"))
-                end
-
-                if isnothing(key)
-                    key = Symbol(gensym(), nameof(f))
-                end
-
-                $dict_name[key] = f
-                return key
-            end
-
-            $remove_name(key) = delete!($dict_name, key)
-        end
+function _add_callback(f, key, dict)
+    if !hasmethod(f, Tuple{Int})
+        throw(ArgumentError("Callback function is invalid, it must be able to accept a single Int argument"))
     end
+
+    if isnothing(key)
+        key = Symbol(gensym(), nameof(f))
+    end
+
+    dict[key] = f
+    return key
 end
+
+_remove_callback(key, dict) = delete!(dict, key)
 
 """
     add_worker_added_callback(f::Base.Callable; key=nothing)
@@ -901,14 +891,14 @@ Register a callback to be called on the master process whenever a worker is
 added. The callback will be called with the added worker ID,
 e.g. `f(w::Int)`. Returns a unique key for the callback.
 """
-function add_worker_added_callback end
+add_worker_added_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_added_callbacks)
 
 """
     remove_worker_added_callback(key)
 
 Remove the callback for `key`.
 """
-function remove_worker_added_callback end
+remove_worker_added_callback(key) = _remove_callback(key, worker_added_callbacks)
 
 """
     add_worker_exiting_callback(f::Base.Callable; key=nothing)
@@ -921,14 +911,14 @@ All callbacks will be executed asynchronously and if they don't all finish
 before the `callback_timeout` passed to `rmprocs()` then the process will be
 removed anyway.
 """
-function add_worker_exiting_callback end
+add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exiting_callbacks)
 
 """
     remove_worker_exiting_callback(key)
 
 Remove the callback for `key`.
 """
-function remove_worker_exiting_callback end
+remove_worker_exiting_callback(key) = _remove_callback(key, worker_exiting_callbacks)
 
 """
     add_worker_exited_callback(f::Base.Callable; key=nothing)
@@ -938,14 +928,14 @@ for any reason (i.e. not only because of [`rmprocs()`](@ref) but also the worker
 segfaulting etc). The callback will be called with the worker ID,
 e.g. `f(w::Int)`. Returns a unique key for the callback.
 """
-function add_worker_exited_callback end
+add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exited_callbacks)
 
 """
     remove_worker_exited_callback(key)
 
 Remove the callback for `key`.
 """
-function remove_worker_exited_callback end
+remove_worker_exited_callback(key) = _remove_callback(key, worker_exited_callbacks)
 
 # cluster management related API
 """
