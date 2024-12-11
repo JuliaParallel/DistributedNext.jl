@@ -7,7 +7,9 @@ DistributedNext.nprocs
 DistributedNext.nworkers
 DistributedNext.procs()
 DistributedNext.procs(::Integer)
+DistributedNext.other_procs()
 DistributedNext.workers
+DistributedNext.other_workers
 DistributedNext.rmprocs
 DistributedNext.interrupt
 DistributedNext.myid
