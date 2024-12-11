@@ -16,6 +16,8 @@ This documents notable changes in DistributedNext.jl. The format is based on
 - A watcher mechanism has been added to detect when both the Distributed stdlib
   and DistributedNext may be active and adding workers. This should help prevent
   incompatibilities from both libraries being used simultaneously ([#10]).
+- Implemented callback support for workers being added/removed etc ([#17]).
+- Added a package extension to support Revise.jl ([#17]).
 
 ## [v1.0.0] - 2024-12-02
 

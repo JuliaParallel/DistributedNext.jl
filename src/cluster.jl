@@ -461,12 +461,14 @@ function addprocs(manager::ClusterManager; kwargs...)
 
     cluster_mgmt_from_master_check()
 
-    lock(worker_lock)
-    try
-        addprocs_locked(manager::ClusterManager; kwargs...)
-    finally
-        unlock(worker_lock)
+    new_workers = @lock worker_lock addprocs_locked(manager::ClusterManager; kwargs...)
+    for worker in new_workers
+        for callback in values(worker_added_callbacks)
+            callback(worker)
+        end
     end
+
+    return new_workers
 end
 
 function addprocs_locked(manager::ClusterManager; kwargs...)
@@ -855,12 +857,85 @@ const HDR_COOKIE_LEN=16
 const map_pid_wrkr = Dict{Int, Union{Worker, LocalProcess}}()
 const map_sock_wrkr = IdDict()
 const map_del_wrkr = Set{Int}()
+const worker_added_callbacks = Dict{Any, Base.Callable}()
+const worker_exiting_callbacks = Dict{Any, Base.Callable}()
+const worker_exited_callbacks = Dict{Any, Base.Callable}()
 
 # whether process is a master or worker in a distributed setup
 myrole() = LPROCROLE[]
 function myrole!(proctype::Symbol)
     LPROCROLE[] = proctype
 end
+
+# Callbacks
+
+function _add_callback(f, key, dict)
+    if !hasmethod(f, Tuple{Int})
+        throw(ArgumentError("Callback function is invalid, it must be able to accept a single Int argument"))
+    end
+
+    if isnothing(key)
+        key = Symbol(gensym(), nameof(f))
+    end
+
+    dict[key] = f
+    return key
+end
+
+_remove_callback(key, dict) = delete!(dict, key)
+
+"""
+    add_worker_added_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process whenever a worker is
+added. The callback will be called with the added worker ID,
+e.g. `f(w::Int)`. Returns a unique key for the callback.
+"""
+add_worker_added_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_added_callbacks)
+
+"""
+    remove_worker_added_callback(key)
+
+Remove the callback for `key`.
+"""
+remove_worker_added_callback(key) = _remove_callback(key, worker_added_callbacks)
+
+"""
+    add_worker_exiting_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process immediately before a
+worker is removed with [`rmprocs()`](@ref). The callback will be called with the
+worker ID, e.g. `f(w::Int)`. Returns a unique key for the callback.
+
+All callbacks will be executed asynchronously and if they don't all finish
+before the `callback_timeout` passed to `rmprocs()` then the process will be
+removed anyway.
+"""
+add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exiting_callbacks)
+
+"""
+    remove_worker_exiting_callback(key)
+
+Remove the callback for `key`.
+"""
+remove_worker_exiting_callback(key) = _remove_callback(key, worker_exiting_callbacks)
+
+"""
+    add_worker_exited_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process when a worker has exited
+for any reason (i.e. not only because of [`rmprocs()`](@ref) but also the worker
+segfaulting etc). The callback will be called with the worker ID,
+e.g. `f(w::Int)`. Returns a unique key for the callback.
+"""
+add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exited_callbacks)
+
+"""
+    remove_worker_exited_callback(key)
+
+Remove the callback for `key`.
+"""
+remove_worker_exited_callback(key) = _remove_callback(key, worker_exited_callbacks)
 
 # cluster management related API
 """
@@ -1025,7 +1100,7 @@ function cluster_mgmt_from_master_check()
 end
 
 """
-    rmprocs(pids...; waitfor=typemax(Int))
+    rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
 
 Remove the specified workers. Note that only process 1 can add or remove
 workers.
@@ -1038,6 +1113,10 @@ Argument `waitfor` specifies how long to wait for the workers to shut down:
     scheduled for removal in a different task. The scheduled [`Task`](@ref) object is
     returned. The user should call [`wait`](@ref) on the task before invoking any other
     parallel calls.
+
+The `callback_timeout` specifies how long to wait for any callbacks to execute
+before continuing to remove the workers (see
+[`add_worker_exiting_callback()`](@ref)).
 
 # Examples
 ```julia-repl
@@ -1055,24 +1134,36 @@ julia> workers()
  6
 ```
 """
-function rmprocs(pids...; waitfor=typemax(Int))
+function rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
     cluster_mgmt_from_master_check()
 
     pids = vcat(pids...)
     if waitfor == 0
-        t = @async _rmprocs(pids, typemax(Int))
+        t = @async _rmprocs(pids, typemax(Int), callback_timeout)
         yield()
         return t
     else
-        _rmprocs(pids, waitfor)
+        _rmprocs(pids, waitfor, callback_timeout)
         # return a dummy task object that user code can wait on.
         return @async nothing
     end
 end
 
-function _rmprocs(pids, waitfor)
+function _rmprocs(pids, waitfor, callback_timeout)
     lock(worker_lock)
     try
+        # Run the callbacks
+        callback_tasks = Task[]
+        for pid in pids
+            for callback in values(worker_exiting_callbacks)
+                push!(callback_tasks, Threads.@spawn callback(pid))
+            end
+        end
+
+        if timedwait(() -> all(istaskdone.(callback_tasks)), callback_timeout) === :timed_out
+            @warn "Some callbacks timed out, continuing to remove workers anyway"
+        end
+
         rmprocset = Union{LocalProcess, Worker}[]
         for p in pids
             if p == 1
@@ -1185,7 +1276,7 @@ function deregister_worker(pg, pid)
             # Notify the cluster manager of this workers death
             manage(w.manager, w.id, w.config, :deregister)
             if PGRP.topology !== :all_to_all || isclusterlazy()
-                for rpid in workers()
+                for rpid in filter(!=(myid()), workers())
                     try
                         remote_do(deregister_worker, rpid, pid)
                     catch
@@ -1218,6 +1309,14 @@ function deregister_worker(pg, pid)
             delete!(pg.refs, id)
         end
     end
+
+    # Call callbacks on the master
+    if myid() == 1
+        for callback in values(worker_exited_callbacks)
+            callback(pid)
+        end
+    end
+
     return
 end
 
