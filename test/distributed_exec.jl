@@ -30,8 +30,15 @@ end
 end
 
 @testset "Distributed loading of packages" begin
-    addprocs_with_testenv(4)
+    @test isempty(other_workers())
+    @test isempty(other_procs())
+
+    pids = addprocs_with_testenv(4)
+
     @test nprocs() == 5
+    @test other_workers() == workers()
+    @test other_procs() == pids
+    @test other_procs(1) == pids
 
     global id_me = myid()
     global id_other = filter(x -> x != id_me, procs())[rand(1:(nprocs()-1))]

@@ -937,6 +937,8 @@ end
 
 Return a list of all process identifiers, including pid 1 (which is not included by [`workers()`](@ref)).
 
+See also [`other_procs()`](@ref).
+
 # Examples
 ```julia-repl
 \$ julia -p 2
@@ -956,6 +958,14 @@ function procs()
         return Int[x.id for x in PGRP.workers]
     end
 end
+
+"""
+    other_procs([pid::Integer])
+
+Identical to [`procs()`](@ref) and [`procs(::Integer)`](@ref), except that the
+current worker is filtered out.
+"""
+other_procs() = filter(!=(myid()), procs())
 
 function id_in_procs(id)  # faster version of `id in procs()`
     if myid() == 1 || (PGRP.topology === :all_to_all  && !isclusterlazy())
@@ -979,6 +989,8 @@ end
 
 Return a list of all process identifiers on the same physical node.
 Specifically all workers bound to the same ip-address as `pid` are returned.
+
+See also [`other_procs()`](@ref).
 """
 function procs(pid::Integer)
     if myid() == 1
@@ -994,10 +1006,14 @@ function procs(pid::Integer)
     end
 end
 
+other_procs(pid::Integer) = filter(!=(myid()), procs(pid))
+
 """
     workers()
 
 Return a list of all worker process identifiers.
+
+See also [`other_workers()`](@ref).
 
 # Examples
 ```julia-repl
@@ -1017,6 +1033,13 @@ function workers()
        filter(x -> x != 1, allp)
     end
 end
+
+"""
+    other_workers()
+
+Identical to [`workers()`](@ref) except that the current worker is filtered out.
+"""
+other_workers() = filter(!=(myid()), workers())
 
 function cluster_mgmt_from_master_check()
     if myid() != 1
