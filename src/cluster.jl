@@ -457,20 +457,34 @@ end
 ```
 """
 function addprocs(manager::ClusterManager; kwargs...)
+    params = merge(default_addprocs_params(manager), Dict{Symbol, Any}(kwargs))
+
     init_multi()
 
     cluster_mgmt_from_master_check()
 
-    lock(worker_lock)
-    try
-        addprocs_locked(manager::ClusterManager; kwargs...)
-    finally
-        unlock(worker_lock)
+    new_workers = @lock worker_lock addprocs_locked(manager::ClusterManager, params)
+
+    callback_tasks = Dict{Any, Task}()
+    for worker in new_workers
+        for (name, callback) in worker_added_callbacks
+            callback_tasks[name] = Threads.@spawn callback(worker)
+        end
     end
+
+    running_callbacks = () -> ["'$(key)'" for (key, task) in callback_tasks if !istaskdone(task)]
+    while timedwait(() -> isempty(running_callbacks()), params[:callback_warning_interval]) === :timed_out
+        callbacks_str = join(running_callbacks(), ", ")
+        @warn "Waiting for these worker-added callbacks to finish: $(callbacks_str)"
+    end
+
+    # Wait on the tasks so that exceptions bubble up
+    wait.(values(callback_tasks))
+
+    return new_workers
 end
 
-function addprocs_locked(manager::ClusterManager; kwargs...)
-    params = merge(default_addprocs_params(manager), Dict{Symbol,Any}(kwargs))
+function addprocs_locked(manager::ClusterManager, params)
     topology(Symbol(params[:topology]))
 
     if PGRP.topology !== :all_to_all
@@ -557,7 +571,8 @@ default_addprocs_params() = Dict{Symbol,Any}(
     :exeflags => ``,
     :env      => [],
     :enable_threaded_blas => false,
-    :lazy => true)
+    :lazy => true,
+    :callback_warning_interval => 10)
 
 
 function setup_launched_worker(manager, wconfig, launched_q)
@@ -855,12 +870,100 @@ const HDR_COOKIE_LEN=16
 const map_pid_wrkr = Dict{Int, Union{Worker, LocalProcess}}()
 const map_sock_wrkr = IdDict()
 const map_del_wrkr = Set{Int}()
+const worker_added_callbacks = Dict{Any, Base.Callable}()
+const worker_exiting_callbacks = Dict{Any, Base.Callable}()
+const worker_exited_callbacks = Dict{Any, Base.Callable}()
 
 # whether process is a master or worker in a distributed setup
 myrole() = LPROCROLE[]
 function myrole!(proctype::Symbol)
     LPROCROLE[] = proctype
 end
+
+# Callbacks
+
+function _add_callback(f, key, dict)
+    if !hasmethod(f, Tuple{Int})
+        throw(ArgumentError("Callback function is invalid, it must be able to accept a single Int argument"))
+    elseif haskey(dict, key)
+        throw(ArgumentError("A callback function with key '$(key)' already exists"))
+    end
+
+    if isnothing(key)
+        key = Symbol(gensym(), nameof(f))
+    end
+
+    dict[key] = f
+    return key
+end
+
+_remove_callback(key, dict) = delete!(dict, key)
+
+"""
+    add_worker_added_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process whenever a worker is
+added. The callback will be called with the added worker ID,
+e.g. `f(w::Int)`. Chooses and returns a unique key for the callback if `key` is
+not specified.
+
+The worker-added callbacks will be executed concurrently. If one throws an
+exception it will not be caught and will bubble up through [`addprocs()`](@ref).
+
+Keep in mind that the callbacks will add to the time taken to launch workers; so
+try to either keep the callbacks fast to execute, or do the actual
+initialization asynchronously by spawning a task in the callback (beware of race
+conditions if you do this).
+"""
+add_worker_added_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_added_callbacks)
+
+"""
+    remove_worker_added_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_added_callback()`](@ref).
+"""
+remove_worker_added_callback(key) = _remove_callback(key, worker_added_callbacks)
+
+"""
+    add_worker_exiting_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process immediately before a
+worker is removed with [`rmprocs()`](@ref). The callback will be called with the
+worker ID, e.g. `f(w::Int)`. Chooses and returns a unique key for the callback
+if `key` is not specified.
+
+All worker-exiting callbacks will be executed concurrently and if they don't
+all finish before the `callback_timeout` passed to `rmprocs()` then the process
+will be removed anyway.
+"""
+add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exiting_callbacks)
+
+"""
+    remove_worker_exiting_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_exiting_callback()`](@ref).
+"""
+remove_worker_exiting_callback(key) = _remove_callback(key, worker_exiting_callbacks)
+
+"""
+    add_worker_exited_callback(f::Base.Callable; key=nothing)
+
+Register a callback to be called on the master process when a worker has exited
+for any reason (i.e. not only because of [`rmprocs()`](@ref) but also the worker
+segfaulting etc). The callback will be called with the worker ID,
+e.g. `f(w::Int)`. Chooses and returns a unique key for the callback if `key` is
+not specified.
+
+If the callback throws an exception it will be caught and printed.
+"""
+add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exited_callbacks)
+
+"""
+    remove_worker_exited_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_exited_callback()`](@ref).
+"""
+remove_worker_exited_callback(key) = _remove_callback(key, worker_exited_callbacks)
 
 # cluster management related API
 """
@@ -1048,7 +1151,7 @@ function cluster_mgmt_from_master_check()
 end
 
 """
-    rmprocs(pids...; waitfor=typemax(Int))
+    rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
 
 Remove the specified workers. Note that only process 1 can add or remove
 workers.
@@ -1061,6 +1164,10 @@ Argument `waitfor` specifies how long to wait for the workers to shut down:
     scheduled for removal in a different task. The scheduled [`Task`](@ref) object is
     returned. The user should call [`wait`](@ref) on the task before invoking any other
     parallel calls.
+
+The `callback_timeout` specifies how long to wait for any callbacks to execute
+before continuing to remove the workers (see
+[`add_worker_exiting_callback()`](@ref)).
 
 # Examples
 ```julia-repl
@@ -1078,24 +1185,38 @@ julia> workers()
  6
 ```
 """
-function rmprocs(pids...; waitfor=typemax(Int))
+function rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
     cluster_mgmt_from_master_check()
 
     pids = vcat(pids...)
     if waitfor == 0
-        t = @async _rmprocs(pids, typemax(Int))
+        t = @async _rmprocs(pids, typemax(Int), callback_timeout)
         yield()
         return t
     else
-        _rmprocs(pids, waitfor)
+        _rmprocs(pids, waitfor, callback_timeout)
         # return a dummy task object that user code can wait on.
         return @async nothing
     end
 end
 
-function _rmprocs(pids, waitfor)
+function _rmprocs(pids, waitfor, callback_timeout)
     lock(worker_lock)
     try
+        # Run the callbacks
+        callback_tasks = Dict{Any, Task}()
+        for pid in pids
+            for (name, callback) in worker_exiting_callbacks
+                callback_tasks[name] = Threads.@spawn callback(pid)
+            end
+        end
+
+        if timedwait(() -> all(istaskdone.(values(callback_tasks))), callback_timeout) === :timed_out
+            timedout_callbacks = ["'$(key)'" for (key, task) in callback_tasks if !istaskdone(task)]
+            callbacks_str = join(timedout_callbacks, ", ")
+            @warn "Some worker-exiting callbacks have not yet finished, continuing to remove workers anyway. These are the callbacks still running: $(callbacks_str)"
+        end
+
         rmprocset = Union{LocalProcess, Worker}[]
         for p in pids
             if p == 1
@@ -1208,7 +1329,7 @@ function deregister_worker(pg, pid)
             # Notify the cluster manager of this workers death
             manage(w.manager, w.id, w.config, :deregister)
             if PGRP.topology !== :all_to_all || isclusterlazy()
-                for rpid in workers()
+                for rpid in filter(!=(myid()), workers())
                     try
                         remote_do(deregister_worker, rpid, pid)
                     catch
@@ -1241,6 +1362,18 @@ function deregister_worker(pg, pid)
             delete!(pg.refs, id)
         end
     end
+
+    # Call callbacks on the master
+    if myid() == 1
+        for (name, callback) in worker_exited_callbacks
+            try
+                callback(pid)
+            catch ex
+                @error "Error when running worker-exited callback '$(name)'" exception=(ex, catch_backtrace())
+            end
+        end
+    end
+
     return
 end
 
