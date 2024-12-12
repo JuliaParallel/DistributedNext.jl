@@ -1937,41 +1937,50 @@ include("splitrange.jl")
 end
 
 @testset "Worker state callbacks" begin
-    if nprocs() > 1
-        rmprocs(workers())
-    end
+    rmprocs(other_workers())
 
     # Smoke test to ensure that all the callbacks are executed
     added_workers = Int[]
     exiting_workers = Int[]
     exited_workers = Int[]
-    added_key = DistributedNext.add_worker_added_callback(pid -> push!(added_workers, pid))
+    added_key = DistributedNext.add_worker_added_callback(pid -> (push!(added_workers, pid); error("foo")))
     exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
     exited_key = DistributedNext.add_worker_exited_callback(pid -> push!(exited_workers, pid))
 
-    pid = only(addprocs(1))
+    # Test that the worker-added exception bubbles up
+    @test_throws TaskFailedException addprocs(1)
+
+    pid = only(workers())
     @test added_workers == [pid]
     rmprocs(workers())
     @test exiting_workers == [pid]
     @test exited_workers == [pid]
+
+    # Trying to reset an existing callback should fail
+    @test_throws ArgumentError DistributedNext.add_worker_added_callback(Returns(nothing); key=added_key)
 
     # Remove the callbacks
     DistributedNext.remove_worker_added_callback(added_key)
     DistributedNext.remove_worker_exiting_callback(exiting_key)
     DistributedNext.remove_worker_exited_callback(exited_key)
 
-    # Test that the `callback_timeout` option works
+    # Test that the worker-exiting `callback_timeout` option works and that we
+    # get warnings about slow worker-added callbacks.
     event = Base.Event()
     callback_task = nothing
+    added_key = DistributedNext.add_worker_added_callback(_ -> sleep(0.5))
     exiting_key = DistributedNext.add_worker_exiting_callback(_ -> (callback_task = current_task(); wait(event)))
-    addprocs(1)
 
-    @test_logs (:warn, r"Some callbacks timed out.+") rmprocs(workers(); callback_timeout=0.5)
+    @test_logs (:warn, r"Waiting for these worker-added callbacks.+") match_mode=:any addprocs(1; callback_warning_interval=0.05)
+    DistributedNext.remove_worker_added_callback(added_key)
+
+    @test_logs (:warn, r"Some worker-exiting callbacks have not yet finished.+") rmprocs(workers(); callback_timeout=0.5)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
 
     notify(event)
     wait(callback_task)
 
-    # Test that the previous callbacks were indeed removed
+    # Test that the initial callbacks were indeed removed
     @test length(added_workers) == 1
     @test length(exiting_workers) == 1
     @test length(exited_workers) == 1
