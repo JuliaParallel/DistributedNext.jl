@@ -1995,7 +1995,7 @@ end
 
     # Test that workers that were killed forcefully are detected as such
     exit_state = nothing
-    DistributedNext.add_worker_exited_callback((pid, state) -> exit_state = state)
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> exit_state = state)
     pid = only(addprocs(1))
 
     redirect_stderr(devnull) do
@@ -2003,6 +2003,7 @@ end
         timedwait(() -> !isnothing(exit_state), 10)
     end
     @test exit_state == DistributedNext.WorkerState_exterminated
+    DistributedNext.remove_worker_exited_callback(exited_key)
 end
 
 # This is a simplified copy of a test from Revise.jl's tests
