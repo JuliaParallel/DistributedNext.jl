@@ -1915,7 +1915,9 @@ include("splitrange.jl")
 
 @testset "Clear all workers for timeout tests (issue #45785)" begin
     nprocs() > 1 && rmprocs(workers())
-    begin
+
+    # This test requires kill(), and that doesn't work on Windows before 1.11
+    if !(Sys.iswindows() && VERSION < v"1.11")
         # First, assert that we get no messages when we close a cooperative worker
         w = only(addprocs(1))
         @test_nowarn begin
@@ -1933,6 +1935,8 @@ include("splitrange.jl")
             end
             wait(rmprocs([w]))
         end
+    else
+        @warn "Skipping timeout tests because kill() isn't supported on Windows for this Julia version"
     end
 end
 
