@@ -92,7 +92,15 @@ mutable struct WorkerConfig
     end
 end
 
-@enum WorkerState W_CREATED W_CONNECTED W_TERMINATING W_TERMINATED W_UNKNOWN_STATE
+@enum WorkerState begin
+    WorkerState_created
+    WorkerState_connected
+    WorkerState_terminating    # rmprocs() has been called on the worker
+    WorkerState_terminated     # Worker was gracefully removed
+    WorkerState_exterminated   # Worker was forcefully removed (not by us)
+    WorkerState_unknown
+end
+
 mutable struct Worker
     id::Int
     msg_lock::Threads.ReentrantLock # Lock for del_msgs, add_msgs, and gcflag
@@ -123,7 +131,7 @@ mutable struct Worker
         w.manager = manager
         w.config = config
         w.version = version
-        set_worker_state(w, W_CONNECTED)
+        set_worker_state(w, WorkerState_connected)
         register_worker_streams(w)
         w
     end
@@ -134,7 +142,7 @@ mutable struct Worker
         if haskey(map_pid_wrkr, id)
             return map_pid_wrkr[id]
         end
-        w=new(id, Threads.ReentrantLock(), [], [], false, W_CREATED, Threads.Condition(), time(), conn_func)
+        w=new(id, Threads.ReentrantLock(), [], [], false, WorkerState_created, Threads.Condition(), time(), conn_func)
         w.initialized = Event()
         register_worker(w)
         w
@@ -150,8 +158,15 @@ function set_worker_state(w, state)
     end
 end
 
+# Helper function to check if a worker is dead or not. It's recommended to use
+# this instead of checking Worker.state manually.
+function is_worker_dead(w::Worker)
+    state = @atomic w.state
+    return state === WorkerState_terminated || state === WorkerState_exterminated
+end
+
 function check_worker_state(w::Worker)
-    if (@atomic w.state) === W_CREATED
+    if (@atomic w.state) === WorkerState_created
         if !isclusterlazy()
             if PGRP.topology === :all_to_all
                 # Since higher pids connect with lower pids, the remote worker
@@ -190,7 +205,7 @@ function exec_conn_func(w::Worker)
 end
 
 function wait_for_conn(w)
-    if (@atomic w.state) === W_CREATED
+    if (@atomic w.state) === WorkerState_created
         timeout =  worker_timeout() - (time() - w.ct_time)
         timeout <= 0 && error("peer $(w.id) has not connected to $(myid())")
 
@@ -203,7 +218,7 @@ function wait_for_conn(w)
         errormonitor(T)
         lock(w.c_state) do
             wait(w.c_state)
-            (@atomic w.state) === W_CREATED && error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
+            (@atomic w.state) === WorkerState_created && error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
         end
     end
     nothing
@@ -666,7 +681,7 @@ function create_worker(manager, wconfig)
             if (jw.id != 1) && (jw.id < w.id)
                 lock(jw.c_state) do
                     # wait for wl to join
-                    if (@atomic jw.state) === W_CREATED
+                    if (@atomic jw.state) === WorkerState_created
                         wait(jw.c_state)
                     end
                 end
@@ -693,7 +708,7 @@ function create_worker(manager, wconfig)
 
         for wl in wlist
             lock(wl.c_state) do
-                if (@atomic wl.state) === W_CREATED
+                if (@atomic wl.state) === WorkerState_created
                     # wait for wl to join
                     wait(wl.c_state)
                 end
@@ -900,7 +915,7 @@ function nprocs()
         n = length(PGRP.workers)
         # filter out workers in the process of being setup/shutdown.
         for jw in PGRP.workers
-            if !isa(jw, LocalProcess) && ((@atomic jw.state) !== W_CONNECTED)
+            if !isa(jw, LocalProcess) && ((@atomic jw.state) !== WorkerState_connected)
                 n = n - 1
             end
         end
@@ -953,7 +968,7 @@ julia> procs()
 function procs()
     if myid() == 1 || (PGRP.topology === :all_to_all  && !isclusterlazy())
         # filter out workers in the process of being setup/shutdown.
-        return Int[x.id for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === W_CONNECTED)]
+        return Int[x.id for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
     else
         return Int[x.id for x in PGRP.workers]
     end
@@ -970,7 +985,7 @@ other_procs() = filter(!=(myid()), procs())
 function id_in_procs(id)  # faster version of `id in procs()`
     if myid() == 1 || (PGRP.topology === :all_to_all  && !isclusterlazy())
         for x in PGRP.workers
-            if (x.id::Int) == id && (isa(x, LocalProcess) || (@atomic (x::Worker).state) === W_CONNECTED)
+            if (x.id::Int) == id && (isa(x, LocalProcess) || (@atomic (x::Worker).state) === WorkerState_connected)
                 return true
             end
         end
@@ -994,7 +1009,7 @@ See also [`other_procs()`](@ref).
 """
 function procs(pid::Integer)
     if myid() == 1
-        all_workers = [x for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === W_CONNECTED)]
+        all_workers = [x for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
         if (pid == 1) || (isa(map_pid_wrkr[pid].manager, LocalManager))
             Int[x.id for x in filter(w -> (w.id==1) || (isa(w.manager, LocalManager)), all_workers)]
         else
@@ -1103,7 +1118,7 @@ function _rmprocs(pids, waitfor)
             else
                 if haskey(map_pid_wrkr, p)
                     w = map_pid_wrkr[p]
-                    set_worker_state(w, W_TERMINATING)
+                    set_worker_state(w, WorkerState_terminating)
                     kill(w.manager, p, w.config)
                     push!(rmprocset, w)
                 end
@@ -1112,11 +1127,11 @@ function _rmprocs(pids, waitfor)
 
         start = time_ns()
         while (time_ns() - start) < waitfor*1e9
-            all(w -> (@atomic w.state) === W_TERMINATED, rmprocset) && break
+            all(is_worker_dead, rmprocset) && break
             sleep(min(0.1, waitfor - (time_ns() - start)/1e9))
         end
 
-        unremoved = [wrkr.id for wrkr in filter(w -> (@atomic w.state) !== W_TERMINATED, rmprocset)]
+        unremoved = [wrkr.id for wrkr in filter(!is_worker_dead, rmprocset)]
         if length(unremoved) > 0
             estr = string("rmprocs: pids ", unremoved, " not terminated after ", waitfor, " seconds.")
             throw(ErrorException(estr))

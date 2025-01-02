@@ -210,7 +210,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
             handle_msg(msg, header, r_stream, w_stream, version)
         end
     catch e
-        oldstate = W_UNKNOWN_STATE
+        oldstate = WorkerState_unknown
 
         # Check again as it may have been set in a message handler but not propagated to the calling block above
         if wpid < 1
@@ -223,7 +223,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
         elseif !(wpid in map_del_wrkr)
             werr = worker_from_id(wpid)
             oldstate = @atomic werr.state
-            set_worker_state(werr, W_TERMINATED)
+            set_worker_state(werr, oldstate != WorkerState_terminating ? WorkerState_exterminated : WorkerState_terminated)
 
             # If unhandleable error occurred talking to pid 1, exit
             if wpid == 1
@@ -243,7 +243,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
         close(w_stream)
 
         if (myid() == 1) && (wpid > 1)
-            if oldstate != W_TERMINATING
+            if oldstate != WorkerState_terminating
                 println(stderr, "Worker $wpid terminated.")
                 rethrow()
             end
