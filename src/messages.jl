@@ -194,7 +194,7 @@ end
 function flush_gc_msgs()
     try
         for w in (PGRP::ProcessGroup).workers
-            if isa(w,Worker) && ((@atomic w.state) == W_CONNECTED) && w.gcflag
+            if isa(w,Worker) && ((@atomic w.state) == WorkerState_connected) && w.gcflag
                 flush_gc_msgs(w)
             end
         end
