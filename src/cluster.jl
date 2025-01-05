@@ -891,6 +891,8 @@ const HDR_COOKIE_LEN = 16
 const map_pid_wrkr = Lockable(Dict{Int, Union{Worker, LocalProcess}}())
 const map_sock_wrkr = Lockable(IdDict())
 const map_del_wrkr = Lockable(Set{Int}())
+const _exited_callback_pid = ScopedValue{Int}(-1)
+const map_pid_statuses = Lockable(Dict{Int, Any}())
 const worker_starting_callbacks = Dict{Any, Base.Callable}()
 const worker_started_callbacks = Dict{Any, Base.Callable}()
 const worker_exiting_callbacks = Dict{Any, Base.Callable}()
@@ -1042,9 +1044,9 @@ segfaulting etc). Chooses and returns a unique key for the callback if `key` is
 not specified.
 
 The callback will be called with the worker ID and the final
-`Distributed.WorkerState` of the worker, e.g. `f(w::Int, state)`. `state` is an
-enum, a value of `WorkerState_terminated` means a graceful exit and a value of
-`WorkerState_exterminated` means the worker died unexpectedly.
+`Distributed.WorkerState` of the worker, e.g. `f(w::Int, state)`. `state` is
+an enum, a value of `WorkerState_terminated` means a graceful exit and a value
+of `WorkerState_exterminated` means the worker died unexpectedly.
 
 All worker-exited callbacks will be executed concurrently. If a callback throws
 an exception it will be caught and printed.
@@ -1237,6 +1239,112 @@ end
 Identical to [`workers()`](@ref) except that the current worker is filtered out.
 """
 other_workers() = filter(!=(myid()), workers())
+
+"""
+    @setstatus! x
+    @setstatus! x pid
+
+Set the status for the calling module on worker `pid` (defaults to the current
+worker) to `x`. `x` may be any serializable object but it's recommended to keep
+it small enough to cheaply send over a network. Statuses can be retrieved inside
+worker-exited callbacks (see [`add_worker_exited_callback`](@ref)) before the
+worker is fully deregistered.
+
+Statuses are keyed by the calling `Module`, so multiple libraries can
+independently track their own status on the same worker without conflicting.
+
+This can be handy if you want a way to know what a worker is doing at any given
+time, or (in combination with a worker-exited callback) for knowing what a
+worker was last doing before it died.
+
+# Examples
+```julia-repl
+julia> DistributedNext.@setstatus! "working on dataset 42"
+"working on dataset 42"
+
+julia> DistributedNext.@getstatus
+"working on dataset 42"
+```
+
+See also [`setstatus!`](@ref) for the function form that accepts an explicit module key.
+"""
+macro setstatus!(x)
+    mod = __module__
+    :(setstatus!($(esc(x)), $mod))
+end
+
+macro setstatus!(x, pid)
+    mod = __module__
+    :(setstatus!($(esc(x)), $mod, $(esc(pid))))
+end
+
+"""
+    setstatus!(x, mod::Module, pid::Int=myid())
+
+Function form of [`@setstatus!`](@ref). Sets the status for module `mod` on
+worker `pid` to `x`.
+"""
+function setstatus!(x, mod::Module, pid::Int=myid())
+    if !id_in_procs(pid)
+        throw(ArgumentError("Worker $(pid) does not exist, cannot set its status"))
+    end
+
+    if myid() == 1
+        @lock map_pid_statuses begin
+            statuses = get!(map_pid_statuses[], pid, Dict{Module, Any}())
+            statuses[mod] = x
+        end
+    else
+        remotecall_fetch(setstatus!, 1, x, mod, myid())
+    end
+end
+
+function _getstatus(pid, mod)
+    @lock map_pid_statuses begin
+        statuses = get(map_pid_statuses[], pid, nothing)
+        isnothing(statuses) ? nothing : get(statuses, mod, nothing)
+    end
+end
+
+"""
+    @getstatus
+    @getstatus pid
+
+Get the status set by the calling module for worker `pid` (defaults to the
+current worker). If one was never explicitly set with [`@setstatus!`](@ref)
+this will return `nothing`.
+
+See also [`getstatus`](@ref) for the function form.
+"""
+macro getstatus()
+    mod = __module__
+    :(getstatus($mod))
+end
+macro getstatus(pid)
+    mod = __module__
+    :(getstatus($mod, $(esc(pid))))
+end
+
+"""
+    getstatus(mod::Module, pid::Int=myid())
+
+Function form of [`@getstatus`](@ref). Gets the status for module `mod` on
+worker `pid`. Returns `nothing` if no status was set.
+"""
+function getstatus(mod::Module, pid::Int=myid())
+    # During the worker-exited callbacks this function may be called, at which
+    # point it will not exist in procs(). Thus we check whether the function is
+    # being called for an exited worker and allow it if so.
+    if !id_in_procs(pid) && _exited_callback_pid[] != pid
+        throw(ArgumentError("Worker $(pid) does not exist, cannot get its status"))
+    end
+
+    if myid() == 1
+        _getstatus(pid, mod)
+    else
+        remotecall_fetch(getstatus, 1, mod, pid)
+    end
+end
 
 function cluster_mgmt_from_master_check()
     if myid() != 1
@@ -1463,15 +1571,22 @@ function deregister_worker(pg, pid)
         end
     end
 
-    # Call callbacks on the master
     if myid() == 1
-        for (name, callback) in worker_exited_callbacks
-            try
-                callback(pid, w.state)
-            catch ex
-                @error "Error when running worker-exited callback '$(name)'" exception=(ex, catch_backtrace())
-            end
+        params = default_addprocs_params(w.manager)
+        warning_interval = params[:callback_warning_interval]
+
+        # Call callbacks on the master, with the scoped value set so that
+        # getstatus() can be called for the exiting worker without failing the
+        # pid check. We go to some effort to make sure this works after
+        # deregistering the worker because if it's called beforehand the worker
+        # will incorrectly be shown in e.g. procs().
+        @with _exited_callback_pid => pid begin
+            _run_callbacks_concurrently("worker-exited", worker_exited_callbacks,
+                                        warning_interval, [(pid, w.state)]; catch_exceptions=true)
         end
+
+        # Delete its statuses
+        @lock map_pid_statuses delete!(map_pid_statuses[], pid)
     end
 
     return

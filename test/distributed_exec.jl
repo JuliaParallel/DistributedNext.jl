@@ -3,7 +3,7 @@
 import Revise
 using DistributedNext, Random, Serialization, Sockets
 import DistributedNext
-import DistributedNext: launch, manage
+import DistributedNext: launch, manage, getstatus, setstatus!, @getstatus, @setstatus!
 
 
 @test cluster_cookie() isa String
@@ -1826,7 +1826,9 @@ end
     let julia = `$(Base.julia_cmd()) --startup-file=no`; mktempdir() do tmp
         pkg_project = joinpath(Base.pkgdir(DistributedNext), "Project.toml")
         project = mkdir(joinpath(tmp, "project"))
-        depots = [mkdir(joinpath(tmp, "depot1")), mkdir(joinpath(tmp, "depot2"))]
+        # Keep the writable depot in the depots list so that external
+        # dependencies (i.e. ScopedValues.jl) can be loaded.
+        depots = [mkdir(joinpath(tmp, "depot1")), mkdir(joinpath(tmp, "depot2")), Base.DEPOT_PATH[1]]
         load_path = [mkdir(joinpath(tmp, "load_path")), "@stdlib", "@", pkg_project]
         pathsep = Sys.iswindows() ? ";" : ":"
         env = Dict(
@@ -1935,7 +1937,7 @@ end
         project = mktempdir()
         env = Dict(
             "JULIA_LOAD_PATH" => string(LOAD_PATH[1], $(repr(pathsep)), "@stdlib", $(repr(pathsep)), "$(escaped_pkg_project)"),
-            "JULIA_DEPOT_PATH" => DEPOT_PATH[1],
+            "JULIA_DEPOT_PATH" => DEPOT_PATH[end],
             "TMPDIR" => ENV["TMPDIR"],
         )
         addprocs(1; env = env, exeflags = `--project=\$(project)`)
@@ -1943,7 +1945,7 @@ end
         addprocs(1; env = env)
         """ * funcscode * """
         for w in workers()
-            @test remotecall_fetch(depot_path, w)          == [DEPOT_PATH[1]]
+            @test remotecall_fetch(depot_path, w)          == [DEPOT_PATH[end]]
             @test remotecall_fetch(load_path, w)           == [LOAD_PATH[1], "@stdlib", "$(escaped_pkg_project)"]
             @test remotecall_fetch(active_project, w)      == project
             @test remotecall_fetch(Base.active_project, w) == joinpath(project, "Project.toml")
@@ -1983,7 +1985,40 @@ include("splitrange.jl")
     end
 end
 
+@testset "Worker statuses" begin
+    rmprocs(other_workers())
+
+    # Test with the local worker using macros
+    @test isnothing(@getstatus())
+    @setstatus!("foo")
+    @test @getstatus() == "foo"
+    @test_throws ArgumentError getstatus(Main, 2)
+
+    # Test with a remote worker using the function form
+    pid = only(addprocs(1))
+    @test isnothing(getstatus(Main, pid))
+    remotecall_wait(setstatus!, pid, "bar", Main, pid)
+    @test remotecall_fetch(getstatus, pid, Main) == "bar"
+
+    # Test that different modules have independent statuses
+    setstatus!("from_main", Main, pid)
+    setstatus!("from_distributed", DistributedNext, pid)
+    @test getstatus(Main, pid) == "from_main"
+    @test getstatus(DistributedNext, pid) == "from_distributed"
+
+    rmprocs(pid)
+end
+
 @testset "Worker state callbacks" begin
+    # Helper function to wait for a worker to have been completely deregistered
+    # (including worker-exited callbacks finished) by waiting for the workers
+    # status to have been deleted. Only works if the worker has a status of
+    # course.
+    function wait_for_deregistration(pid)
+        statuses = DistributedNext.map_pid_statuses
+        @test timedwait(() -> @lock(statuses, !haskey(statuses[], pid)), 10) == :ok
+    end
+
     rmprocs(other_workers())
 
     # Adding a callback with an invalid signature should fail
@@ -2040,16 +2075,34 @@ end
     @test length(exiting_workers) == 1
     @test length(exited_workers) == 1
 
-    # Test that workers that were killed forcefully are detected as such
+    # Test that workers that were killed forcefully are detected as such, and
+    # that statuses can be retrieved in the callback.
     exit_state = nothing
-    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> exit_state = state)
+    last_status = nothing
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> (exit_state = state; last_status = @getstatus(pid)))
     pid = only(addprocs(1))
+    @setstatus!("foo", pid)
 
+    # Kill the process with stderr redirected so the error messages don't
+    # unnecessarily show up in the logs.
     redirect_stderr(devnull) do
         remote_do(exit, pid)
-        timedwait(() -> !isnothing(exit_state), 10)
+        wait_for_deregistration(pid)
     end
     @test exit_state == DistributedNext.WorkerState_exterminated
+    @test last_status == "foo"
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that exceptions in worker-exited callbacks are caught
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> error("foo"))
+    @test_logs (:error, r"Error when running worker-exited callback.+") match_mode=:any begin
+        pid = only(addprocs(1))
+        # Set a dummy status so that wait_for_deregistration() works
+        @setstatus!("foo", pid)
+        rmprocs(pid)
+
+        wait_for_deregistration(pid)
+    end
     DistributedNext.remove_worker_exited_callback(exited_key)
 end
 

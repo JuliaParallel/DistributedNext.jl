@@ -12,6 +12,8 @@ This documents notable changes in DistributedNext.jl. The format is based on
 ### Added
 - Implemented callback support for workers being added/removed etc ([#17]).
 - Added a package extension to support Revise.jl ([#17]).
+- Added support for setting worker statuses with [`setstatus`](@ref) and
+  [`getstatus`](@ref) ([#17]).
 
 ### Fixed
 - Modified the default implementations of methods like `take!` and `wait` on
