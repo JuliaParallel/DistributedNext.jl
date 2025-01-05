@@ -870,6 +870,8 @@ const LPROC = LocalProcess()
 const LPROCROLE = Ref{Symbol}(:master)
 const HDR_VERSION_LEN=16
 const HDR_COOKIE_LEN=16
+const map_pid_statuses = Dict{Int, Any}()
+const map_pid_statuses_lock = ReentrantLock()
 const map_pid_wrkr = Dict{Int, Union{Worker, LocalProcess}}()
 const map_sock_wrkr = IdDict()
 const map_del_wrkr = Set{Int}()
@@ -1010,15 +1012,16 @@ for any reason (i.e. not only because of [`rmprocs()`](@ref) but also the worker
 segfaulting etc). Chooses and returns a unique key for the callback if `key` is
 not specified.
 
-The callback will be called with the worker ID and the final
-`Distributed.WorkerState` of the worker, e.g. `f(w::Int, state)`. `state` is an
+The callback will be called with the worker ID, the final
+`Distributed.WorkerState` of the worker, and the last status of the worker as
+set by [`setstatus`](@ref), e.g. `f(w::Int, state, status)`. `state` is an
 enum, a value of `WorkerState_terminated` means a graceful exit and a value of
 `WorkerState_exterminated` means the worker died unexpectedly.
 
 If the callback throws an exception it will be caught and printed.
 """
 add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exited_callbacks;
-                                                                          arg_types=Tuple{Int, WorkerState})
+                                                                          arg_types=Tuple{Int, WorkerState, Any})
 
 """
     remove_worker_exited_callback(key)
@@ -1205,6 +1208,59 @@ end
 Identical to [`workers()`](@ref) except that the current worker is filtered out.
 """
 other_workers() = filter(!=(myid()), workers())
+
+"""
+    setstatus(x, pid::Int=myid())
+
+Set the status for worker `pid` to `x`. `x` may be any serializable object but
+it's recommended to keep it small enough to cheaply send over a network. The
+status will be passed to the worker-exited callbacks (see
+[`add_worker_exited_callback`](@ref)) when the worker exits.
+
+This can be handy if you want a way to know what a worker is doing at any given
+time, or (in combination with a worker-exited callback) for knowing what a
+worker was last doing before it died.
+
+# Examples
+```julia-repl
+julia> DistributedNext.setstatus("working on dataset 42")
+"working on dataset 42"
+
+julia> DistributedNext.getstatus()
+"working on dataset 42"
+```
+"""
+function setstatus(x, pid::Int=myid())
+    if pid ∉ procs()
+        throw(ArgumentError("Worker $(pid) does not exist, cannot set its status"))
+    end
+
+    if myid() == 1
+        @lock map_pid_statuses_lock map_pid_statuses[pid] = x
+    else
+        remotecall_fetch(setstatus, 1, x, myid())
+    end
+end
+
+_getstatus(pid) = @lock map_pid_statuses_lock get!(map_pid_statuses, pid, nothing)
+
+"""
+    getstatus(pid::Int=myid())
+
+Get the status for worker `pid`. If one was never explicitly set with
+[`setstatus`](@ref) this will return `nothing`.
+"""
+function getstatus(pid::Int=myid())
+    if pid ∉ procs()
+        throw(ArgumentError("Worker $(pid) does not exist, cannot get its status"))
+    end
+
+    if myid() == 1
+        _getstatus(pid)
+    else
+        remotecall_fetch(getstatus, 1, pid)
+    end
+end
 
 function cluster_mgmt_from_master_check()
     if myid() != 1
@@ -1425,15 +1481,20 @@ function deregister_worker(pg, pid)
         end
     end
 
-    # Call callbacks on the master
     if myid() == 1
+        status = _getstatus(pid)
+
+        # Call callbacks on the master
         for (name, callback) in worker_exited_callbacks
             try
-                callback(pid, w.state)
+                callback(pid, w.state, status)
             catch ex
                 @error "Error when running worker-exited callback '$(name)'" exception=(ex, catch_backtrace())
             end
         end
+
+        # Delete its status
+        @lock map_pid_statuses_lock delete!(map_pid_statuses, pid)
     end
 
     return

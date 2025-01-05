@@ -3,7 +3,7 @@
 import Revise
 using DistributedNext, Random, Serialization, Sockets
 import DistributedNext
-import DistributedNext: launch, manage
+import DistributedNext: launch, manage, getstatus, setstatus
 
 
 @test cluster_cookie() isa String
@@ -1940,6 +1940,24 @@ include("splitrange.jl")
     end
 end
 
+@testset "Worker statuses" begin
+    rmprocs(other_workers())
+
+    # Test with the local worker
+    @test isnothing(getstatus())
+    setstatus("foo")
+    @test getstatus() == "foo"
+    @test_throws ArgumentError getstatus(2)
+
+    # Test with a remote worker
+    pid = only(addprocs(1))
+    @test isnothing(getstatus(pid))
+    remotecall_wait(setstatus, pid, "bar", pid)
+    @test remotecall_fetch(getstatus, pid) == "bar"
+
+    rmprocs(pid)
+end
+
 @testset "Worker state callbacks" begin
     rmprocs(other_workers())
 
@@ -1954,7 +1972,7 @@ end
     starting_key = DistributedNext.add_worker_starting_callback((manager, kwargs) -> push!(starting_managers, manager))
     started_key = DistributedNext.add_worker_started_callback(pid -> (push!(started_workers, pid); error("foo")))
     exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
-    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> push!(exited_workers, (pid, state)))
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state, status) -> push!(exited_workers, (pid, state, status)))
 
     # Test that the worker-started exception bubbles up
     @test_throws TaskFailedException addprocs(1)
@@ -1964,7 +1982,7 @@ end
     @test started_workers == [pid]
     rmprocs(workers())
     @test exiting_workers == [pid]
-    @test exited_workers == [(pid, DistributedNext.WorkerState_terminated)]
+    @test exited_workers == [(pid, DistributedNext.WorkerState_terminated, nothing)]
 
     # Trying to reset an existing callback should fail
     @test_throws ArgumentError DistributedNext.add_worker_started_callback(Returns(nothing); key=started_key)
@@ -1997,16 +2015,20 @@ end
     @test length(exiting_workers) == 1
     @test length(exited_workers) == 1
 
-    # Test that workers that were killed forcefully are detected as such
+    # Test that workers that were killed forcefully are detected as such, and
+    # that statuses are passed properly.
     exit_state = nothing
-    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> exit_state = state)
+    last_status = nothing
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state, status) -> (exit_state = state; last_status = status))
     pid = only(addprocs(1))
+    setstatus("foo", pid)
 
     redirect_stderr(devnull) do
         remote_do(exit, pid)
         timedwait(() -> !isnothing(exit_state), 10)
     end
     @test exit_state == DistributedNext.WorkerState_exterminated
+    @test last_status == "foo"
     DistributedNext.remove_worker_exited_callback(exited_key)
 end
 
