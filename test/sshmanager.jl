@@ -67,6 +67,11 @@ end
         @test 8000 >= worker.config.port < 9000
         test_n_remove_pids(new_pids)
 
+        print("\nssh addprocs with multiple workers and port specified\n")
+        new_pids = addprocs_with_testenv([("localhost 127.0.0.1:8000", 2)]; sshflags=sshflags)
+        @test length(new_pids) == 2
+        test_n_remove_pids(new_pids)
+
         print("\nssh addprocs with tunnel\n")
         new_pids = addprocs_with_testenv([("localhost", num_workers)]; tunnel=true, sshflags=sshflags)
         @test length(new_pids) == num_workers
