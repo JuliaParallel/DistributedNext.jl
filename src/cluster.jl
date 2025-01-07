@@ -733,8 +733,29 @@ function launch_additional(np::Integer, cmd::Cmd)
     io_objs = Vector{Any}(undef, np)
     addresses = Vector{Any}(undef, np)
 
+    worker_cmd = Cmd(cmd)
+    bind_idx = findfirst(==("--bind-to"), cmd)
+    if !isnothing(bind_idx)
+        # The actual bind spec will be the next argument
+        bind_idx += 1
+
+        bind_addr = worker_cmd[bind_idx]
+        parts = split(bind_addr, ':')
+        if length(parts) == 2
+            port_str = parts[2]
+
+            # If the port is not specified as a port hint then we convert it
+            # to a hint, otherwise the workers will try to bind to the same
+            # port and error.
+            if !startswith(port_str, '[')
+                new_bind_addr = "$(parts[1]):[$(port_str)]"
+                worker_cmd.exec[bind_idx] = new_bind_addr
+            end
+        end
+    end
+
     for i in 1:np
-        io = open(detach(cmd), "r+")
+        io = open(detach(worker_cmd), "r+")
         write_cookie(io)
         io_objs[i] = io.out
     end

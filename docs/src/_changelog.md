@@ -11,6 +11,10 @@ This documents notable changes in DistributedNext.jl. The format is based on
 
 ### Fixed
 - Fixed a cause of potential hangs when exiting the process ([#16]).
+- Fixed cases like `addprocs([("machine 10.1.1.1:9000", 2)])` where the bind
+  port is specified. Previously this would cause errors when the workers all
+  tried to bind to the same port, now all additional workers will treat the bind
+  port as a port hint ([#19]).
 
 ### Added
 - A watcher mechanism has been added to detect when both the Distributed stdlib
