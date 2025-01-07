@@ -11,6 +11,10 @@ This documents notable changes in DistributedNext.jl. The format is based on
 
 ### Fixed
 - Fixed a cause of potential hangs when exiting the process ([#16]).
+- Fixed a subtle bug in `remotecall(f, ::AbstractWorkerPool)`, previously the
+  implementation would take a worker out of the pool and immediately put it back
+  in without waiting for the returned [`Future`](@ref). Now it will wait for the
+  `Future` before putting the worker back in the pool ([#20]).
 
 ### Added
 - A watcher mechanism has been added to detect when both the Distributed stdlib

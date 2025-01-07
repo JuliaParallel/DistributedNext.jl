@@ -1014,6 +1014,19 @@ f16091b = () -> 1
         @test_throws RemoteException fetch(ref)
     end
 
+    # Test the behaviour of remotecall(f, ::AbstractWorkerPool), this should
+    # keep the worker out of the pool until the underlying remotecall has
+    # finished.
+    remotechan = RemoteChannel(wrkr1)
+    pool = WorkerPool([wrkr1])
+    put_future = remotecall(() -> wait(remotechan), pool)
+    @test !isready(pool)
+    put!(remotechan, 1)
+    wait(put_future)
+    # The task that waits on the future to put it back into the pool runs
+    # asynchronously so we use timedwait() to check when the worker is back in.
+    @test timedwait(() -> isready(pool), 10) === :ok
+
     # Test calling @everywhere from a module not defined on the workers
     LocalBar.bar()
     for p in procs()
