@@ -214,6 +214,7 @@ end
 mutable struct LocalProcess
     id::Int
     bind_addr::String
+    bind_port_hint::Int
     bind_port::Int
     cookie::String
     LocalProcess() = new(1)
@@ -257,8 +258,7 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
     init_worker(cookie)
     interface = IPv4(LPROC.bind_addr)
     if LPROC.bind_port == 0
-        port_hint = 9000 + (getpid() % 1000)
-        (port, sock) = listenany(interface, port_hint)
+        (port, sock) = listenany(interface, LPROC.bind_port_hint)
         LPROC.bind_port = Int(port)
     else
         sock = listen(interface, LPROC.bind_port)
@@ -1318,17 +1318,24 @@ end
 # initialize the local proc network address / port
 function init_bind_addr()
     opts = JLOptions()
+    bind_port_hint = 9000 + (getpid() % 1000)
+    bind_port = 0
+
     if opts.bindto != C_NULL
         bind_to = split(unsafe_string(opts.bindto), ":")
         bind_addr = string(parse(IPAddr, bind_to[1]))
         if length(bind_to) > 1
-            bind_port = parse(Int,bind_to[2])
-        else
-            bind_port = 0
+            port_str = bind_to[2]
+            if startswith(port_str, '[')
+                if !endswith(port_str, ']')
+                    error("Malformed bind port string, please see the addprocs documentation for the formatting rules: $(port_str)")
+                end
+                bind_port_hint = parse(Int, port_str[2:end - 1])
+            else
+                bind_port = parse(Int, port_str)
+            end
         end
     else
-        bind_port = 0
-
         interfaces = _get_interfaces(IPv4)
         if isempty(interfaces)
             # Include IPv6 interfaces if there are no IPv4 ones
@@ -1355,6 +1362,7 @@ function init_bind_addr()
     global LPROC
     LPROC.bind_addr = bind_addr
     LPROC.bind_port = bind_port
+    LPROC.bind_port_hint = bind_port_hint
 end
 
 using Random: randstring
