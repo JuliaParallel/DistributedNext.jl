@@ -22,6 +22,8 @@ This documents notable changes in DistributedNext.jl. The format is based on
   incompatibilities from both libraries being used simultaneously ([#10]).
 - [`other_workers()`](@ref) and [`other_procs()`](@ref) were implemented and
   exported ([#18]).
+- The `SSHManager` now supports specifying a bind port hint in the machine
+  specification ([#19], see the [`addprocs()`](@ref) docs).
 
 ### Changed
 - [`remotecall_eval`](@ref) is now exported ([#23]).

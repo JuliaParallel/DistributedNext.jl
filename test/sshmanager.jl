@@ -61,6 +61,12 @@ end
         @test length(new_pids) == 5
         test_n_remove_pids(new_pids)
 
+        print("\nssh addprocs with a port hint\n")
+        new_pids = addprocs_with_testenv(["localhost 127.0.0.1:[8000]"]; sshflags=sshflags)
+        worker = DistributedNext.worker_from_id(only(new_pids))
+        @test 8000 >= worker.config.port < 9000
+        test_n_remove_pids(new_pids)
+
         print("\nssh addprocs with tunnel\n")
         new_pids = addprocs_with_testenv([("localhost", num_workers)]; tunnel=true, sshflags=sshflags)
         @test length(new_pids) == num_workers
