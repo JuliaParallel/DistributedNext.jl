@@ -11,6 +11,11 @@ This documents notable changes in DistributedNext.jl. The format is based on
 
 ### Fixed
 - Fixed a cause of potential hangs when exiting the process ([#16]).
+- Modified the default implementations of methods like `take!` and `wait` on
+  [`AbstractWorkerPool`](@ref) to be threadsafe and behave more consistently
+  with each other. This is technically breaking, but it's a strict bugfix to
+  correct previous inconsistent behaviour so it will still land in a minor
+  release.
 
 ### Added
 - A watcher mechanism has been added to detect when both the Distributed stdlib

@@ -744,6 +744,25 @@ end
     status = timedwait(() -> isready(f), 10)
     @test status == :ok
 
+    # Test behaviour with missing workers. Note that pool_workers is assigned
+    # such that the FIFO behaviour of Channel's will ensure that all the tested
+    # methods will see the bad_worker first.
+    bad_worker = maximum(workers()) + 1
+    pool_workers = [bad_worker, 1]
+
+    wp = WorkerPool(pool_workers)
+    @test take!(wp) == 1 # Test take!()
+    @test !isready(wp)
+    @test bad_worker ∉ wp.workers
+
+    @test !isready(WorkerPool([bad_worker]))
+
+    wp = WorkerPool(pool_workers)
+    # This should not hang, and it should end up removing the dead worker
+    wait(wp)
+    @test isready(wp)
+    @test bad_worker ∉ wp.workers
+
     # CachingPool tests
     wp = CachingPool(workers())
     @test [1:100...] == pmap(x->x, wp, 1:100)
