@@ -7,6 +7,15 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## Unreleased
+
+### Fixed
+- Modified the default implementations of methods like `take!` and `wait` on
+  [`AbstractWorkerPool`](@ref) to be threadsafe and behave more consistently
+  with each other ([#21]). This is technically breaking, but it's a strict
+  bugfix to correct previous inconsistent behaviour so it will still land in a
+  minor release.
+
 ## [v1.1.1] - 2026-03-09
 
 ### Fixed
