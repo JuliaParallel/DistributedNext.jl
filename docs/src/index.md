@@ -15,7 +15,7 @@ DistributedNext.interrupt
 DistributedNext.myid
 DistributedNext.pmap
 DistributedNext.getstatus
-DistributedNext.setstatus
+DistributedNext.setstatus!
 DistributedNext.RemoteException
 DistributedNext.ProcessExitedException
 DistributedNext.Future
