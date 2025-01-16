@@ -1014,7 +1014,7 @@ not specified.
 
 The callback will be called with the worker ID, the final
 `Distributed.WorkerState` of the worker, and the last status of the worker as
-set by [`setstatus`](@ref), e.g. `f(w::Int, state, status)`. `state` is an
+set by [`setstatus!`](@ref), e.g. `f(w::Int, state, status)`. `state` is an
 enum, a value of `WorkerState_terminated` means a graceful exit and a value of
 `WorkerState_exterminated` means the worker died unexpectedly.
 
@@ -1210,7 +1210,7 @@ Identical to [`workers()`](@ref) except that the current worker is filtered out.
 other_workers() = filter(!=(myid()), workers())
 
 """
-    setstatus(x, pid::Int=myid())
+    setstatus!(x, pid::Int=myid())
 
 Set the status for worker `pid` to `x`. `x` may be any serializable object but
 it's recommended to keep it small enough to cheaply send over a network. The
@@ -1223,14 +1223,14 @@ worker was last doing before it died.
 
 # Examples
 ```julia-repl
-julia> DistributedNext.setstatus("working on dataset 42")
+julia> DistributedNext.setstatus!("working on dataset 42")
 "working on dataset 42"
 
 julia> DistributedNext.getstatus()
 "working on dataset 42"
 ```
 """
-function setstatus(x, pid::Int=myid())
+function setstatus!(x, pid::Int=myid())
     if pid ∉ procs()
         throw(ArgumentError("Worker $(pid) does not exist, cannot set its status"))
     end
@@ -1238,7 +1238,7 @@ function setstatus(x, pid::Int=myid())
     if myid() == 1
         @lock map_pid_statuses_lock map_pid_statuses[pid] = x
     else
-        remotecall_fetch(setstatus, 1, x, myid())
+        remotecall_fetch(setstatus!, 1, x, myid())
     end
 end
 
@@ -1248,7 +1248,7 @@ _getstatus(pid) = @lock map_pid_statuses_lock get!(map_pid_statuses, pid, nothin
     getstatus(pid::Int=myid())
 
 Get the status for worker `pid`. If one was never explicitly set with
-[`setstatus`](@ref) this will return `nothing`.
+[`setstatus!`](@ref) this will return `nothing`.
 """
 function getstatus(pid::Int=myid())
     if pid ∉ procs()

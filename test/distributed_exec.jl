@@ -3,7 +3,7 @@
 import Revise
 using DistributedNext, Random, Serialization, Sockets
 import DistributedNext
-import DistributedNext: launch, manage, getstatus, setstatus
+import DistributedNext: launch, manage, getstatus, setstatus!
 
 
 @test cluster_cookie() isa String
@@ -1945,14 +1945,14 @@ end
 
     # Test with the local worker
     @test isnothing(getstatus())
-    setstatus("foo")
+    setstatus!("foo")
     @test getstatus() == "foo"
     @test_throws ArgumentError getstatus(2)
 
     # Test with a remote worker
     pid = only(addprocs(1))
     @test isnothing(getstatus(pid))
-    remotecall_wait(setstatus, pid, "bar", pid)
+    remotecall_wait(setstatus!, pid, "bar", pid)
     @test remotecall_fetch(getstatus, pid) == "bar"
 
     rmprocs(pid)
@@ -2021,7 +2021,7 @@ end
     last_status = nothing
     exited_key = DistributedNext.add_worker_exited_callback((pid, state, status) -> (exit_state = state; last_status = status))
     pid = only(addprocs(1))
-    setstatus("foo", pid)
+    setstatus!("foo", pid)
 
     redirect_stderr(devnull) do
         remote_do(exit, pid)
