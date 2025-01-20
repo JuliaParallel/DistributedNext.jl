@@ -25,7 +25,7 @@ jobs:
         version:
           - 'nightly'
           - '1'
-          - '1.9'
+          - '1.10'
         os:
           - ubuntu-latest
           - macOS-latest
@@ -36,26 +36,14 @@ jobs:
         exclude:
           - os: macOS-latest
             arch: x86
-          - os: windows-latest # Killing workers doesn't work on windows in 1.9
-            version: '1.9'
 
     steps:
       - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: actions/cache@v4
-        env:
-          cache-name: cache-artifacts
-        with:
-          path: ~/.julia/artifacts
-          key: ${{ runner.os }}-test-${{ env.cache-name }}-${{ hashFiles('**/Project.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-test-${{ env.cache-name }}-
-            ${{ runner.os }}-test-${{ matrix.os }}
-            ${{ runner.os }}-
-      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-runtest@v1
         env:
           JULIA_NUM_THREADS: 4
@@ -70,8 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@latest
-        with:
-          version: '1'
+      - uses: julia-actions/cache@v2
       - name: Install dependencies
         run: julia --project=docs/ -e 'using Pkg; Pkg.instantiate()'
       - name: Build and deploy
