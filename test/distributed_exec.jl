@@ -1,7 +1,9 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+import Revise
 using DistributedNext, Random, Serialization, Sockets
-import DistributedNext: launch, manage
+import DistributedNext
+import DistributedNext: launch, manage, getstatus, setstatus!
 
 
 @test cluster_cookie() isa String
@@ -1926,7 +1928,9 @@ include("splitrange.jl")
 
 @testset "Clear all workers for timeout tests (issue #45785)" begin
     nprocs() > 1 && rmprocs(workers())
-    begin
+
+    # This test requires kill(), and that doesn't work on Windows before 1.11
+    if !(Sys.iswindows() && VERSION < v"1.11")
         # First, assert that we get no messages when we close a cooperative worker
         w = only(addprocs(1))
         @test_nowarn begin
@@ -1944,8 +1948,165 @@ include("splitrange.jl")
             end
             wait(rmprocs([w]))
         end
+    else
+        @warn "Skipping timeout tests because kill() isn't supported on Windows for this Julia version"
     end
 end
+
+@testset "Worker statuses" begin
+    rmprocs(other_workers())
+
+    # Test with the local worker
+    @test isnothing(getstatus())
+    setstatus!("foo")
+    @test getstatus() == "foo"
+    @test_throws ArgumentError getstatus(2)
+
+    # Test with a remote worker
+    pid = only(addprocs(1))
+    @test isnothing(getstatus(pid))
+    remotecall_wait(setstatus!, pid, "bar", pid)
+    @test remotecall_fetch(getstatus, pid) == "bar"
+
+    rmprocs(pid)
+end
+
+@testset "Worker state callbacks" begin
+    rmprocs(other_workers())
+
+    # Adding a callback with an invalid signature should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(() -> nothing)
+
+    # Smoke test to ensure that all the callbacks are executed
+    starting_managers = []
+    started_workers = Int[]
+    exiting_workers = Int[]
+    exited_workers = []
+    starting_key = DistributedNext.add_worker_starting_callback((manager, kwargs) -> push!(starting_managers, manager))
+    started_key = DistributedNext.add_worker_started_callback(pid -> (push!(started_workers, pid); error("foo")))
+    exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state, status) -> push!(exited_workers, (pid, state, status)))
+
+    # Test that the worker-started exception bubbles up
+    @test_throws TaskFailedException addprocs(1)
+
+    pid = only(workers())
+    @test only(starting_managers) isa DistributedNext.LocalManager
+    @test started_workers == [pid]
+    rmprocs(workers())
+    @test exiting_workers == [pid]
+    @test exited_workers == [(pid, DistributedNext.WorkerState_terminated, nothing)]
+
+    # Trying to reset an existing callback should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(Returns(nothing); key=started_key)
+
+    # Remove the callbacks
+    DistributedNext.remove_worker_starting_callback(starting_key)
+    DistributedNext.remove_worker_started_callback(started_key)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that the worker-exiting `callback_timeout` option works and that we
+    # get warnings about slow worker-started callbacks.
+    event = Base.Event()
+    callback_task = nothing
+    started_key = DistributedNext.add_worker_started_callback(_ -> sleep(0.5))
+    exiting_key = DistributedNext.add_worker_exiting_callback(_ -> (callback_task = current_task(); wait(event)))
+
+    @test_logs (:warn, r"Waiting for these worker-started callbacks.+") match_mode=:any addprocs(1; callback_warning_interval=0.05)
+    DistributedNext.remove_worker_started_callback(started_key)
+
+    @test_logs (:warn, r"Some worker-exiting callbacks have not yet finished.+") rmprocs(workers(); callback_timeout=0.5)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+
+    notify(event)
+    wait(callback_task)
+
+    # Test that the initial callbacks were indeed removed
+    @test length(starting_managers) == 1
+    @test length(started_workers) == 1
+    @test length(exiting_workers) == 1
+    @test length(exited_workers) == 1
+
+    # Test that workers that were killed forcefully are detected as such, and
+    # that statuses are passed properly.
+    exit_state = nothing
+    last_status = nothing
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state, status) -> (exit_state = state; last_status = status))
+    pid = only(addprocs(1))
+    setstatus!("foo", pid)
+
+    redirect_stderr(devnull) do
+        remote_do(exit, pid)
+        timedwait(() -> !isnothing(exit_state), 10)
+    end
+    @test exit_state == DistributedNext.WorkerState_exterminated
+    @test last_status == "foo"
+    DistributedNext.remove_worker_exited_callback(exited_key)
+end
+
+# This is a simplified copy of a test from Revise.jl's tests
+@testset "Revise.jl integration" begin
+    function rm_precompile(pkgname::AbstractString)
+        filepath = Base.cache_file_entry(Base.PkgId(pkgname))
+        isa(filepath, Tuple) && (filepath = filepath[1]*filepath[2])  # Julia 1.3+
+        for depot in DEPOT_PATH
+            fullpath = joinpath(depot, filepath)
+            isfile(fullpath) && rm(fullpath)
+        end
+    end
+
+    pid = only(addprocs(1))
+
+    # Test that initialization succeeds by checking that Main.whichtt is defined
+    # on the worker, which is defined by Revise.init_worker().
+    @test timedwait(() ->remotecall_fetch(() -> hasproperty(Main, :whichtt), pid), 10) == :ok
+
+    tmpdir = mktempdir()
+    @everywhere push!(LOAD_PATH, $tmpdir)  # Don't want to share this LOAD_PATH
+
+    # Create a fake package
+    module_file = joinpath(tmpdir, "ReviseDistributed", "src", "ReviseDistributed.jl")
+    mkpath(dirname(module_file))
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = π
+          g(::Int) = 0
+
+          end
+          """)
+
+    # Check that we can use it
+    @everywhere using ReviseDistributed
+    for p in procs()
+        @test remotecall_fetch(ReviseDistributed.f, p)    == π
+        @test remotecall_fetch(ReviseDistributed.g, p, 1) == 0
+    end
+
+    # Test changing and deleting methods
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = 3.0
+
+          end
+          """)
+    Revise.revise()
+    for p in procs()
+        # We use timedwait() here because worker updates from Revise are asynchronous
+        @test timedwait(() -> remotecall_fetch(ReviseDistributed.f, p) == 3.0, 10) == :ok
+
+        @test_throws RemoteException remotecall_fetch(ReviseDistributed.g, p, 1)
+    end
+
+    rmprocs(workers())
+    rm_precompile("ReviseDistributed")
+    pop!(LOAD_PATH)
+end
+
 
 # Run topology tests last after removing all workers, since a given
 # cluster at any time only supports a single topology.

@@ -14,6 +14,8 @@ DistributedNext.rmprocs
 DistributedNext.interrupt
 DistributedNext.myid
 DistributedNext.pmap
+DistributedNext.getstatus
+DistributedNext.setstatus!
 DistributedNext.RemoteException
 DistributedNext.ProcessExitedException
 DistributedNext.Future
@@ -51,6 +53,19 @@ DistributedNext.channel_from_id
 DistributedNext.worker_id_from_socket
 DistributedNext.cluster_cookie()
 DistributedNext.cluster_cookie(::Any)
+```
+
+## Callbacks
+
+```@docs
+DistributedNext.add_worker_starting_callback
+DistributedNext.remove_worker_starting_callback
+DistributedNext.add_worker_started_callback
+DistributedNext.remove_worker_started_callback
+DistributedNext.add_worker_exiting_callback
+DistributedNext.remove_worker_exiting_callback
+DistributedNext.add_worker_exited_callback
+DistributedNext.remove_worker_exited_callback
 ```
 
 ## Cluster Manager Interface
