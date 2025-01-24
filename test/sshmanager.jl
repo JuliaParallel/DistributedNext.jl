@@ -1,6 +1,6 @@
 using Test
 using DistributedNext
-import Sockets: getipaddr
+import Sockets: getipaddr, listenany
 
 import LibSSH as ssh
 import LibSSH.Demo: DemoServer
@@ -26,8 +26,11 @@ function test_n_remove_pids(new_pids)
 end
 
 @testset "SSHManager" begin
-    DemoServer(2222; auth_methods=[ssh.AuthMethod_None], allow_auth_none=true, verbose=false, timeout=3600) do
-        sshflags = `-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222 `
+    ssh_port, server = listenany(2222)
+    close(server)
+
+    DemoServer(Int(ssh_port); auth_methods=[ssh.AuthMethod_None], allow_auth_none=true, verbose=false, timeout=3600) do
+        sshflags = `-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR -p $(ssh_port)`
         #Issue #9951
         hosts=[]
         localhost_aliases = ["localhost", string(getipaddr()), "127.0.0.1"]
@@ -66,7 +69,7 @@ end
         print("\nssh addprocs with tunnel (SSH multiplexing)\n")
         new_pids = addprocs_with_testenv([("localhost", num_workers)]; tunnel=true, multiplex=true, sshflags=sshflags)
         @test length(new_pids) == num_workers
-        controlpath = joinpath(ssh_dir, "julia-$(ENV["USER"])@localhost:2222")
+        controlpath = joinpath(ssh_dir, "julia-$(ENV["USER"])@localhost:$(ssh_port)")
         @test issocket(controlpath)
         test_n_remove_pids(new_pids)
         @test :ok == timedwait(()->!issocket(controlpath), 10.0; pollint=0.5)
@@ -82,9 +85,11 @@ end
         h1 = "localhost"
         user = ENV["USER"]
         h2 = "$user@$h1"
-        h3 = "$h2:2222"
+        h3 = "$h2:$(ssh_port)"
         h4 = "$h3 $(string(getipaddr()))"
-        h5 = "$h4:9300"
+        (bind_port, server) = listenany(9300)
+        close(server)
+        h5 = "$h4:$(bind_port)"
 
         new_pids = addprocs_with_testenv([h1, h2, h3, h4, h5]; sshflags=sshflags)
         @test length(new_pids) == 5
