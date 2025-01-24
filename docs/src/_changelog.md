@@ -23,6 +23,9 @@ This documents notable changes in DistributedNext.jl. The format is based on
 - [`other_workers()`](@ref) and [`other_procs()`](@ref) were implemented and
   exported ([#18]).
 
+### Changed
+- [`remotecall_eval`](@ref) is now exported ([#23]).
+
 ## [v1.0.0] - 2024-12-02
 
 ### Fixed

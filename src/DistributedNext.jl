@@ -51,6 +51,7 @@ export
     other_procs,
     remote,
     remotecall,
+    remotecall_eval,
     remotecall_fetch,
     remotecall_wait,
     remote_do,
