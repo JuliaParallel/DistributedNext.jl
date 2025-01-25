@@ -1847,11 +1847,11 @@ end
         end
         """
         cmd = setenv(`$(julia) --project=$(project) -e $(testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # JULIA_PROJECT
         cmd = setenv(`$(julia) -e $(testcode * extracode)`,
                      (env["JULIA_PROJECT"] = project; env))
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # Pkg.activate(...)
         activateish = """
         Base.ACTIVE_PROJECT[] = $(repr(project))
@@ -1859,7 +1859,7 @@ end
         addprocs(1)
         """
         cmd = setenv(`$(julia) -e $(activateish * testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # JULIA_(LOAD|DEPOT)_PATH
         shufflecode = """
         d = reverse(DEPOT_PATH)
@@ -1878,7 +1878,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(shufflecode * addcode * testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # Mismatch when shuffling after proc addition. Note that the use of
         # `addcode` mimics the behaviour of -p1 as the first worker is started
         # before `shufflecode` executes.
@@ -1890,7 +1890,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(failcode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
 
         # Hideous hack to double escape path separators on Windows so that it gets
         # interpolated into the string (and then Cmd) correctly.
@@ -1917,7 +1917,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(envcode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
     end end
 end
 
