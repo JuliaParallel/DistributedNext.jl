@@ -786,7 +786,7 @@ function check_master_connect()
     errormonitor(
         Threads.@spawn begin
             timeout = worker_timeout()
-            if timedwait(() -> !haskey(map_pid_wrkr, 1), timeout) === :timed_out
+            if timedwait(() -> haskey(map_pid_wrkr, 1), timeout) === :timed_out
                 print(stderr, "Master process (id 1) could not connect within $(timeout) seconds.\nexiting.\n")
                 exit(1)
             end
