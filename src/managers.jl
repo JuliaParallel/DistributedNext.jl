@@ -56,23 +56,32 @@ arguments (see below). In particular, the `exename` keyword can be used to speci
 the path to the `julia` binary on the remote machine(s).
 
 `machines` is a vector of "machine specifications" which are given as strings of
-the form `[user@]host[:port] [bind_addr[:port]]`. `user` defaults to current user and `port`
-to the standard SSH port. If `[bind_addr[:port]]` is specified, other workers will connect
-to this worker at the specified `bind_addr` and `port`.
+the form `[user@]host[:ssh_port] [bind_addr[:bind_port]]`. `user` defaults to
+current user and `ssh_port` to the standard SSH port. If
+`[bind_addr[:bind_port]]` is specified, other workers will connect to this
+worker at the specified `bind_addr` and `bind_port`. `bind_port` can be a
+specific port like in `addr:9000`, but it can also specify a port hint by
+enclosing it in brackets like `addr:[9000]`. Giving a port hint means that
+DistributedNext will try to bind to the specified port, but will fall back to
+another free port if it's unavailable.
 
 It is possible to launch multiple processes on a remote host by using a tuple in the
 `machines` vector or the form `(machine_spec, count)`, where `count` is the number of
 workers to be launched on the specified host. Passing `:auto` as the worker count will
-launch as many workers as the number of CPU threads on the remote host.
+launch as many workers as the number of CPU threads on the remote host. If the
+`bind_port` is specified then the first worker will bind to `bind_port` and all
+other workers on the host will use `bind_port` as a port hint.
 
 **Examples**:
 ```julia
 addprocs([
-    "remote1",               # one worker on 'remote1' logging in with the current username
-    "user@remote2",          # one worker on 'remote2' logging in with the 'user' username
-    "user@remote3:2222",     # specifying SSH port to '2222' for 'remote3'
-    ("user@remote4", 4),     # launch 4 workers on 'remote4'
-    ("user@remote5", :auto), # launch as many workers as CPU threads on 'remote5'
+    "remote1",                     # one worker on 'remote1' logging in with the current username
+    "user@remote2",                # one worker on 'remote2' logging in with the 'user' username
+    "user@remote3:2222",           # specifying SSH port to '2222' for 'remote3'
+    "user@remote4 10.1.1.1:8000"   # specify the address for the worker to bind to on 'remote4'
+    "user@remote5 10.1.1.1:[8000]" # same as above, but with a port hint instead of a specific port
+    ("user@remote4", 4),           # launch 4 workers on 'remote4'
+    ("user@remote5", :auto),       # launch as many workers as CPU threads on 'remote5'
 ])
 ```
 

@@ -15,6 +15,10 @@ This documents notable changes in DistributedNext.jl. The format is based on
   implementation would take a worker out of the pool and immediately put it back
   in without waiting for the returned [`Future`](@ref). Now it will wait for the
   `Future` before putting the worker back in the pool ([#20]).
+- Fixed cases like `addprocs([("machine 10.1.1.1:9000", 2)])` where the bind
+  port is specified. Previously this would cause errors when the workers all
+  tried to bind to the same port, now all additional workers will treat the bind
+  port as a port hint ([#19]).
 
 ### Added
 - A watcher mechanism has been added to detect when both the Distributed stdlib
@@ -22,6 +26,8 @@ This documents notable changes in DistributedNext.jl. The format is based on
   incompatibilities from both libraries being used simultaneously ([#10]).
 - [`other_workers()`](@ref) and [`other_procs()`](@ref) were implemented and
   exported ([#18]).
+- The `SSHManager` now supports specifying a bind port hint in the machine
+  specification ([#19], see the [`addprocs()`](@ref) docs).
 
 ### Changed
 - [`remotecall_eval`](@ref) is now exported ([#23]).
