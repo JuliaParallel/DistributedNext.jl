@@ -1374,8 +1374,8 @@ function init_bind_addr()
                 # If none of them report speed just pick the first one
                 bind_addr = string(interfaces[1].ip)
             else
-                idx = findmax(x -> x.speed, interfaces)[2]
-                bind_addr = string(interfaces[idx].ip)
+                idx = findmax(x -> x.speed, interfaces_with_speed)[2]
+                bind_addr = string(interfaces_with_speed[idx].ip)
             end
         end
     end

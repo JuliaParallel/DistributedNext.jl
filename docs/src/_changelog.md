@@ -19,6 +19,9 @@ This documents notable changes in DistributedNext.jl. The format is based on
   port is specified. Previously this would cause errors when the workers all
   tried to bind to the same port, now all additional workers will treat the bind
   port as a port hint ([#19]).
+- Fixed a bug in the network interface selection code that would cause it to
+  error when only a subset of interfaces reported the negotiation speed
+  ([#29]).
 
 ### Added
 - A watcher mechanism has been added to detect when both the Distributed stdlib
