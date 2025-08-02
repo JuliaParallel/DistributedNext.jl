@@ -7,7 +7,7 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
-## Unreleased
+## [v1.1.0] - 2025-08-02
 
 ### Fixed
 - Fixed a cause of potential hangs when exiting the process ([#16]).
