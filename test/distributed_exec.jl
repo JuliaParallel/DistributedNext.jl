@@ -243,7 +243,7 @@ end
             end
         end
     end
-    @test testval == 1
+    @test timedwait(() -> testval == 1, 10) == :ok
 
     # Issue number #25847
     @everywhere function f25847(ref)
