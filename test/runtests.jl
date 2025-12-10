@@ -1,6 +1,8 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 using Test
+import DistributedNext
+import Aqua
 
 # Run the distributed test outside of the main driver since it needs its own
 # set of dedicated workers.
@@ -22,3 +24,7 @@ include("distributed_exec.jl")
 include("managers.jl")
 
 include("distributed_stdlib_detection.jl")
+
+@testset "Aqua" begin
+    Aqua.test_all(DistributedNext)
+end
