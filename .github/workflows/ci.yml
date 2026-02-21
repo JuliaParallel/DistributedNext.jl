@@ -15,6 +15,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref != 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') || github.run_number }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
@@ -45,6 +48,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
@@ -73,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: julia-actions/setup-julia@latest
         with:
           version: '1'
@@ -82,3 +89,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: julia --project=docs/ docs/make.jl
+
+  jet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@latest
+        with:
+          version: '1.12'
+          # version: 'nightly'
+      - run: julia --color=yes --project=ci/jet -e 'import Pkg; Pkg.instantiate()'
+      - name: Run the JET tests
+        run: julia --color=yes --project=ci/jet ci/jet/check.jl
