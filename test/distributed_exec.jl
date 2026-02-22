@@ -243,7 +243,7 @@ end
             end
         end
     end
-    @test testval == 1
+    @test timedwait(() -> testval == 1, 10) == :ok
 
     # Issue number #25847
     @everywhere function f25847(ref)
@@ -722,6 +722,8 @@ end
     @test nworkers() == length(unique(remotecall_fetch(wp->pmap(_->myid(), wp, 1:100), id_other, wp)))
     wp = WorkerPool(2:3)
     @test sort(unique(pmap(_->myid(), wp, 1:100))) == [2,3]
+    @test fetch(remotecall(myid, wp)) in wp.workers
+    @test_throws RemoteException fetch(remotecall(error, wp))
 
     # wait on worker pool
     wp = WorkerPool(2:2)
@@ -747,6 +749,8 @@ end
     # CachingPool tests
     wp = CachingPool(workers())
     @test [1:100...] == pmap(x->x, wp, 1:100)
+    @test fetch(remotecall(myid, wp)) in wp.workers
+    @test_throws RemoteException fetch(remotecall(error, wp))
 
     clear!(wp)
     @test length(wp.map_obj2ref) == 0
@@ -1017,15 +1021,19 @@ f16091b = () -> 1
     # Test the behaviour of remotecall(f, ::AbstractWorkerPool), this should
     # keep the worker out of the pool until the underlying remotecall has
     # finished.
-    remotechan = RemoteChannel(wrkr1)
-    pool = WorkerPool([wrkr1])
-    put_future = remotecall(() -> wait(remotechan), pool)
-    @test !isready(pool)
-    put!(remotechan, 1)
-    wait(put_future)
-    # The task that waits on the future to put it back into the pool runs
-    # asynchronously so we use timedwait() to check when the worker is back in.
-    @test timedwait(() -> isready(pool), 10) === :ok
+    for PoolType in (WorkerPool, CachingPool)
+        let
+            remotechan = RemoteChannel(wrkr1)
+            pool = PoolType([wrkr1])
+            put_future = remotecall(() -> wait(remotechan), pool)
+            @test !isready(pool)
+            put!(remotechan, 1)
+            wait(put_future)
+            # The task that waits on the future to put it back into the pool runs
+            # asynchronously so we use timedwait() to check when the worker is back in.
+            @test timedwait(() -> isready(pool), 10) === :ok
+        end
+    end
 
     # Test calling @everywhere from a module not defined on the workers
     LocalBar.bar()
@@ -1707,18 +1715,17 @@ end
         end
 
         # Ensure that the code has indeed been successfully executed everywhere
-        @test all(in(results), procs())
+        return all(in(results), procs())
     end
 
     # Test that the client port is reused. SO_REUSEPORT may not be supported on
     # all UNIX platforms, Linux kernels prior to 3.9 and older versions of OSX
     @assert nprocs() == 1
     addprocs_with_testenv(4; lazy=false)
-    if ccall(:jl_has_so_reuseport, Int32, ()) == 1
-        reuseport_tests()
-    else
-        @info "SO_REUSEPORT is unsupported, skipping reuseport tests"
-    end
+
+    skip_reuseexport = ccall(:jl_has_so_reuseport, Int32, ()) != 1
+    skip_reuseexport && @debug "SO_REUSEPORT support missing, reuseport_tests skipped"
+    @test reuseport_tests() skip = skip_reuseexport
 end
 
 @testset "Even more various individual issues" begin
@@ -1848,11 +1855,11 @@ end
         end
         """
         cmd = setenv(`$(julia) --project=$(project) -e $(testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # JULIA_PROJECT
         cmd = setenv(`$(julia) -e $(testcode * extracode)`,
                      (env["JULIA_PROJECT"] = project; env))
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # Pkg.activate(...)
         activateish = """
         Base.ACTIVE_PROJECT[] = $(repr(project))
@@ -1860,7 +1867,7 @@ end
         addprocs(1)
         """
         cmd = setenv(`$(julia) -e $(activateish * testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # JULIA_(LOAD|DEPOT)_PATH
         shufflecode = """
         d = reverse(DEPOT_PATH)
@@ -1879,7 +1886,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(shufflecode * addcode * testcode * extracode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
         # Mismatch when shuffling after proc addition. Note that the use of
         # `addcode` mimics the behaviour of -p1 as the first worker is started
         # before `shufflecode` executes.
@@ -1891,7 +1898,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(failcode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
 
         # Hideous hack to double escape path separators on Windows so that it gets
         # interpolated into the string (and then Cmd) correctly.
@@ -1918,7 +1925,7 @@ end
         end
         """
         cmd = setenv(`$(julia) -e $(envcode)`, env)
-        @test success(cmd)
+        @test success(pipeline(cmd; stdout, stderr))
     end end
 end
 
@@ -1935,7 +1942,7 @@ include("splitrange.jl")
 
         # Next, ensure we get a log message when a worker does not cleanly exit
         w = only(addprocs(1))
-        @test_logs (:warn, r"sending SIGQUIT") begin
+        @test_logs (:warn, r"Sending SIGQUIT") match_mode=:any begin
             remote_do(w) do
                 # Cause the 'exit()' message that `rmprocs()` sends to do nothing
                 Core.eval(Base, :(exit() = nothing))
