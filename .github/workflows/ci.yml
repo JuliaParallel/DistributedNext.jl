@@ -38,6 +38,9 @@ jobs:
           - '32' # 32-bit Julia. Only available on x86_64. Not available on aarch64.
           - '64' # 64-bit Julia.
         exclude:
+          # Killing workers doesn't work on Windows in Julia 1.10:
+          - os: windows-latest
+            version: '1.10'
           # We don't have 32-bit builds of Julia for Intel macOS:
           - os: macos-15-intel # Intel
             julia-wordsize: '32'
