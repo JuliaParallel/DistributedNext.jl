@@ -69,9 +69,26 @@ jobs:
             ${{ runner.os }}-test-${{ matrix.os }}
             ${{ runner.os }}-
       - uses: julia-actions/julia-buildpkg@v1
+      - name: Decide what the value of JULIA_NUM_THREADS should be
+        id: decide-numthreads-str
+        run: |
+          if Base.VERSION >= v"1.12-"
+              # The x,y format for threadpools requires Julia 1.9 or above.
+              # However, Julia didn't begin starting with 1 interactive thread by default until Julia 1.12
+              # So we don't need to bother with this on Julia 1.11 and earlier
+              value = "1,0"
+          else
+              value = "1"
+          end
+          open(ENV["GITHUB_OUTPUT"], "a") do io
+              name = "numthreads"
+              line = "$(name)=$(value)"
+              println(io, line)
+          end
+        shell: julia --color=yes {0}
       - uses: julia-actions/julia-runtest@v1
         env:
-          JULIA_NUM_THREADS: 4,0
+          JULIA_NUM_THREADS: ${{ steps.decide-numthreads-str.outputs.numthreads }}
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v5
         with:
