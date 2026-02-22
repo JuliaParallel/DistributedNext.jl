@@ -126,7 +126,7 @@ addprocs([
 
 * `exeflags`: additional flags passed to the worker processes. It can either be a `Cmd`, a `String`
   holding one flag, or a collection of strings, with one element per flag.
-  E.g. `\`--threads=auto project=.\``, `"--compile-trace=stderr"` or `["--threads=auto", "--compile=all"]`. 
+  E.g. `\`--threads=auto project=.\``, `"--compile-trace=stderr"` or `["--threads=auto", "--compile=all"]`.
 
 * `topology`: Specifies how the workers connect to each other. Sending a message between
   unconnected workers results in an error.
@@ -553,7 +553,7 @@ end
 
 function manage(manager::LocalManager, id::Integer, config::WorkerConfig, op::Symbol)
     if op === :interrupt
-        kill(config.process, 2)
+        kill(config.process::Process, 2)
     end
 end
 
@@ -775,14 +775,15 @@ function kill(manager::LocalManager, pid::Int, config::WorkerConfig; exit_timeou
         sleep(exit_timeout)
 
         # Check to see if our child exited, and if not, send an actual kill signal
-        if !process_exited(config.process)
+        process = config.process::Process
+        if !process_exited(process)
             @warn("Failed to gracefully kill worker $(pid), sending SIGQUIT")
-            kill(config.process, Base.SIGQUIT)
+            kill(process, Base.SIGQUIT)
 
             sleep(term_timeout)
-            if !process_exited(config.process)
+            if !process_exited(process)
                 @warn("Worker $(pid) ignored SIGQUIT, sending SIGKILL")
-                kill(config.process, Base.SIGKILL)
+                kill(process, Base.SIGKILL)
             end
         end
     end
