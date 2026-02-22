@@ -1,0 +1,11 @@
+[deps]
+DistributedNext = "fab6aee4-877b-4bac-a744-3eca44acbb6f"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+DistributedNext = {path = "../.."}
+
+[compat]
+JET = "0.11"
