@@ -17,7 +17,6 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -30,26 +29,35 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-        arch:
-          - x64
-          - x86
-        include:
-          - os: macOS-latest
-            arch: aarch64
-            version: '1'
-          - os: macOS-latest
-            arch: aarch64
-            version: 'nightly'
+          - macos-15-intel # Intel
+          - macos-latest # Apple Silicon
+        julia-wordsize:
+          # The value here only affects the version of Julia binary that we download.
+          # It does not affect the architecture of the GitHub Runner (virtual machine) that
+          # we run on.
+          - '32' # 32-bit Julia. Only available on x86_64. Not available on aarch64.
+          - '64' # 64-bit Julia.
         exclude:
-          - os: windows-latest # Killing workers doesn't work on windows in 1.9
-            version: '1.9'
+          # We don't have 32-bit builds of Julia for Intel macOS:
+          - os: macos-15-intel # Intel
+            julia-wordsize: '32'
+          #
+          # We don't have 32-bit builds of Julia for Apple Silicon macOS:
+          - os: macos-latest # Apple Silicon
+            julia-wordsize: '32'
 
     steps:
       - uses: actions/checkout@v6
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
-          arch: ${{ matrix.arch }}
+          # If `julia-wordsize` is 32, then we set `arch` to `x86`, because we know that
+          # 32-bit builds of Julia are only available for x86.
+          #
+          # If `julia-wordsize` is 64, then we set `arch` to `${{ runner.arch }}`, which
+          # GitHub will automatically expand to the correct value (`x86_64` or `aarch64`)
+          # based on the architecture of the underlying GitHub Runner (virtual machine).
+          arch: ${{ github.ref == '32' && 'x86' || runner.arch }}
       - uses: actions/cache@v5
         env:
           cache-name: cache-artifacts
