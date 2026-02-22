@@ -14,8 +14,10 @@ cmd = `$test_exename $test_exeflags`
 if Sys.isunix()
     # Run the SSH tests with a single thread because LibSSH.jl is not thread-safe
     sshtestfile = joinpath(@__DIR__, "sshmanager.jl")
-    if Base.VERSION >= v"1.9-"
+    if Base.VERSION >= v"1.12-"
         # The x,y format for threadpools requires Julia 1.9 or above.
+        # However, Julia didn't begin starting with 1 interactive thread by default until Julia 1.12
+        # So we don't need to bother with this on Julia 1.11 and earlier
         JULIA_NUM_THREADS = "1,0"
     else
         JULIA_NUM_THREADS = "1"
