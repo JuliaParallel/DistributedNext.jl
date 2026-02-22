@@ -14,6 +14,12 @@ cmd = `$test_exename $test_exeflags`
 if Sys.isunix()
     # Run the SSH tests with a single thread because LibSSH.jl is not thread-safe
     sshtestfile = joinpath(@__DIR__, "sshmanager.jl")
+    if Base.VERSION >= v"1.9-"
+        # The x,y format for threadpools requires Julia 1.9 or above.
+        JULIA_NUM_THREADS = "1,0"
+    else
+        JULIA_NUM_THREADS = "1"
+    end
     run(addenv(`$cmd $sshtestfile`, "JULIA_NUM_THREADS" => "1"))
 else
     @warn "Skipping the SSH tests because this platform is not supported"
