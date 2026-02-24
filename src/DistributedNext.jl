@@ -6,6 +6,8 @@ for the purposes of testing new things before merging upstream. Here be dragons!
 """
 module DistributedNext
 
+# Hello world
+
 # imports for extension
 import Base: getindex, wait, put!, take!, fetch, isready, push!, length,
              hash, ==, kill, close, isopen, showerror, iterate, IteratorSize
