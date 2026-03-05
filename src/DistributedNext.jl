@@ -134,7 +134,10 @@ include("pmap.jl")
 include("managers.jl")    # LocalManager and SSHManager
 include("precompile.jl")
 
+_stdlib_watcher_timer::Union{Timer, Nothing} = nothing
+
 function __init__()
+    global _stdlib_watcher_timer
     init_parallel()
 
     if ccall(:jl_generating_output, Cint, ()) == 0
@@ -143,20 +146,12 @@ function __init__()
         # cluster cookie has been set, which is most likely to have been done
         # through Distributed.init_multi() being called by Distributed.addprocs() or
         # something.
-        watcher_task = Threads.@spawn while true
+        _stdlib_watcher_timer = Timer(0; interval=1) do timer
             if _check_distributed_active()
-                return
-            end
-
-            try
-                sleep(1)
-            catch
-                # sleep() may throw when the internal object it waits on is closed
-                # as the process exits.
-                return
+                close(timer)
             end
         end
-        errormonitor(watcher_task)
+        atexit(() -> close(_stdlib_watcher_timer))
     end
 end
 
