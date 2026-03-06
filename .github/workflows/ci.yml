@@ -42,6 +42,7 @@ jobs:
           - '64' # 64-bit Julia.
         exclude:
           # Killing workers doesn't work on Windows in Julia 1.10:
+          # (It does work on 1.11+)
           - os: windows-latest
             version: '1.10'
           # We don't have 32-bit builds of Julia for Intel macOS:
