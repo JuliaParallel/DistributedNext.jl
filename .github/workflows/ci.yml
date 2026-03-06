@@ -105,6 +105,8 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # necessary to be able to push to the gh-pages branch
     steps:
       - uses: actions/checkout@v6
         with:
