@@ -343,9 +343,12 @@ end
 @testset "Ser/deser to non-ClusterSerializer objects" begin
     function test_regular_io_ser(ref::DistributedNext.AbstractRemoteRef)
         io = IOBuffer()
-        serialize(io, ref)
+        # Wrapping the ref in a Dict to exercise the case when the
+        # type parameter of the RemoteChannel is part of an outer type.
+        # See https://github.com/JuliaLang/Distributed.jl/issues/178
+        serialize(io, Dict("ref" => ref))
         seekstart(io)
-        ref2 = deserialize(io)
+        ref2 = deserialize(io)["ref"]
         for fld in fieldnames(typeof(ref))
             v = getfield(ref2, fld)
             if isa(v, Number)
@@ -361,6 +364,7 @@ end
 
     test_regular_io_ser(Future())
     test_regular_io_ser(RemoteChannel())
+    test_regular_io_ser(RemoteChannel(() -> Channel{Bool}(1)))
 end
 
 @testset "@distributed and [un]buffered reads" begin
