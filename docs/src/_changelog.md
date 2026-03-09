@@ -7,7 +7,7 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
-## Unreleased
+## [v1.1.1] - 2026-03-09
 
 ### Fixed
 - Backported various fixes from Distributed ([#25]).
