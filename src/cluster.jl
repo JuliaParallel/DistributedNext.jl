@@ -826,24 +826,19 @@ function cluster_cookie(cookie)
     cookie
 end
 
-
-let next_pid = 2    # 1 is reserved for the client (always)
-    global get_next_pid
-    function get_next_pid()
-        retval = next_pid
-        next_pid += 1
-        retval
-    end
-end
+# 1 is reserved for the client (always)
+const next_pid = Threads.Atomic{Int}(2)
+# Note that atomic_add!() returns the old value, which is what we want
+get_next_pid() = Threads.atomic_add!(next_pid, 1)
 
 mutable struct ProcessGroup
     name::String
-    workers::Array{Any,1}
+    workers::Vector{Union{Worker, LocalProcess}}
     refs::Dict{RRID,Any}                  # global references
     topology::Symbol
     lazy::Union{Bool, Nothing}
 
-    ProcessGroup(w::Array{Any,1}) = new("pg-default", w, Dict(), :all_to_all, nothing)
+    ProcessGroup(w::Vector) = new("pg-default", w, Dict(), :all_to_all, nothing)
 end
 const PGRP = ProcessGroup([])
 

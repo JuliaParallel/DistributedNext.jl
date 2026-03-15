@@ -1,11 +1,9 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-let nextidx = Threads.Atomic{Int}(0)
-    global nextproc
-    function nextproc()
-        idx = Threads.atomic_add!(nextidx, 1)
-        return workers()[(idx % nworkers()) + 1]
-    end
+const nextidx = Threads.Atomic{Int}(0)
+function nextproc()
+    idx = Threads.atomic_add!(nextidx, 1)
+    return workers()[(idx % nworkers()) + 1]
 end
 
 spawnat(p, thunk) = remotecall(thunk, p)
