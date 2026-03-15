@@ -106,6 +106,17 @@ function _require_callback(mod::Base.PkgId)
     end
 end
 
+# This is a minimal copy of Base.Lockable we use for backwards compatibility with 1.10
+struct Lockable{T, L <: Base.AbstractLock}
+    value::T
+    lock::L
+end
+Lockable(value) = Lockable(value, ReentrantLock())
+Base.getindex(l::Lockable) = (Base.assert_havelock(l.lock); l.value)
+Base.lock(l::Lockable) = lock(l.lock)
+Base.trylock(l::Lockable) = trylock(l.lock)
+Base.unlock(l::Lockable) = unlock(l.lock)
+
 const REF_ID = Threads.Atomic{Int}(1)
 next_ref_id() = Threads.atomic_add!(REF_ID, 1)
 

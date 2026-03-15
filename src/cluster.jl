@@ -139,8 +139,8 @@ mutable struct Worker
     Worker(id::Int) = Worker(id, nothing)
     function Worker(id::Int, conn_func)
         @assert id > 0
-        if haskey(map_pid_wrkr, id)
-            return map_pid_wrkr[id]
+        @lock map_pid_wrkr if haskey(map_pid_wrkr[], id)
+            return map_pid_wrkr[][id]
         end
         w=new(id, Threads.ReentrantLock(), [], [], false, W_CREATED, Threads.Condition(), time(), conn_func)
         w.initialized = Event()
@@ -407,7 +407,7 @@ function init_worker(cookie::AbstractString, manager::ClusterManager=DefaultClus
 
     # System is started in head node mode, cleanup related entries
     empty!(PGRP.workers)
-    empty!(map_pid_wrkr)
+    @lock map_pid_wrkr empty!(map_pid_wrkr[])
 
     cluster_cookie(cookie)
     nothing
@@ -793,7 +793,7 @@ function check_master_connect()
     errormonitor(
         Threads.@spawn begin
             timeout = worker_timeout()
-            if timedwait(() -> haskey(map_pid_wrkr, 1), timeout) === :timed_out
+            if timedwait(() -> @lock(map_pid_wrkr, haskey(map_pid_wrkr[], 1)), timeout) === :timed_out
                 print(stderr, "Master process (id 1) could not connect within $(timeout) seconds.\nexiting.\n")
                 exit(1)
             end
@@ -868,11 +868,11 @@ end
 # globals
 const LPROC = LocalProcess()
 const LPROCROLE = Ref{Symbol}(:master)
-const HDR_VERSION_LEN=16
-const HDR_COOKIE_LEN=16
-const map_pid_wrkr = Dict{Int, Union{Worker, LocalProcess}}()
-const map_sock_wrkr = IdDict()
-const map_del_wrkr = Set{Int}()
+const HDR_VERSION_LEN = 16
+const HDR_COOKIE_LEN = 16
+const map_pid_wrkr = Lockable(Dict{Int, Union{Worker, LocalProcess}}())
+const map_sock_wrkr = Lockable(IdDict())
+const map_del_wrkr = Lockable(Set{Int}())
 
 # whether process is a master or worker in a distributed setup
 myrole() = LPROCROLE[]
@@ -1013,7 +1013,7 @@ See also [`other_procs()`](@ref).
 function procs(pid::Integer)
     if myid() == 1
         all_workers = [x for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === W_CONNECTED)]
-        if (pid == 1) || (isa(map_pid_wrkr[pid].manager, LocalManager))
+        if (pid == 1) || (isa(@lock(map_pid_wrkr, map_pid_wrkr[][pid].manager), LocalManager))
             Int[x.id for x in filter(w -> (w.id==1) || (isa(w.manager, LocalManager)), all_workers)]
         else
             ipatpid = get_bind_addr(pid)
@@ -1119,8 +1119,8 @@ function _rmprocs(pids, waitfor)
             if p == 1
                 @warn "rmprocs: process 1 not removed"
             else
-                if haskey(map_pid_wrkr, p)
-                    w = map_pid_wrkr[p]
+                w = @lock map_pid_wrkr get(map_pid_wrkr[], p, nothing)
+                if !isnothing(w)
                     set_worker_state(w, W_TERMINATING)
                     kill(w.manager, p, w.config)
                     push!(rmprocset, w)
@@ -1160,16 +1160,17 @@ ProcessExitedException() = ProcessExitedException(-1)
 
 worker_from_id(i) = worker_from_id(PGRP, i)
 function worker_from_id(pg::ProcessGroup, i)
-    if !isempty(map_del_wrkr) && in(i, map_del_wrkr)
+    @lock map_del_wrkr if !isempty(map_del_wrkr[]) && in(i, map_del_wrkr[])
         throw(ProcessExitedException(i))
     end
-    w = get(map_pid_wrkr, i, nothing)
+
+    w = @lock map_pid_wrkr get(map_pid_wrkr[], i, nothing)
     if w === nothing
         if myid() == 1
             error("no process with id $i exists")
         end
         w = Worker(i)
-        map_pid_wrkr[i] = w
+        @lock map_pid_wrkr map_pid_wrkr[][i] = w
     else
         w = w::Union{Worker, LocalProcess}
     end
@@ -1185,7 +1186,7 @@ This is useful when writing custom [`serialize`](@ref) methods for a type,
 which optimizes the data written out depending on the receiving process id.
 """
 function worker_id_from_socket(s)
-    w = get(map_sock_wrkr, s, nothing)
+    w = @lock map_sock_wrkr get(map_sock_wrkr[], s, nothing)
     if isa(w,Worker)
         if s === w.r_stream || s === w.w_stream
             return w.id
@@ -1202,23 +1203,28 @@ end
 register_worker(w) = register_worker(PGRP, w)
 function register_worker(pg, w)
     push!(pg.workers, w)
-    map_pid_wrkr[w.id] = w
+    @lock map_pid_wrkr map_pid_wrkr[][w.id] = w
 end
 
 function register_worker_streams(w)
-    map_sock_wrkr[w.r_stream] = w
-    map_sock_wrkr[w.w_stream] = w
+    @lock map_sock_wrkr begin
+        map_sock_wrkr[][w.r_stream] = w
+        map_sock_wrkr[][w.w_stream] = w
+    end
 end
 
 deregister_worker(pid) = deregister_worker(PGRP, pid)
 function deregister_worker(pg, pid)
     pg.workers = filter(x -> !(x.id == pid), pg.workers)
-    w = pop!(map_pid_wrkr, pid, nothing)
+
+    w = @lock map_pid_wrkr pop!(map_pid_wrkr[], pid, nothing)
     if isa(w, Worker)
         if isdefined(w, :r_stream)
-            pop!(map_sock_wrkr, w.r_stream, nothing)
-            if w.r_stream != w.w_stream
-                pop!(map_sock_wrkr, w.w_stream, nothing)
+            @lock map_sock_wrkr begin
+                pop!(map_sock_wrkr[], w.r_stream, nothing)
+                if w.r_stream != w.w_stream
+                    pop!(map_sock_wrkr[], w.w_stream, nothing)
+                end
             end
         end
 
@@ -1235,7 +1241,7 @@ function deregister_worker(pg, pid)
             end
         end
     end
-    push!(map_del_wrkr, pid)
+    @lock map_del_wrkr push!(map_del_wrkr[], pid)
 
     # delete this worker from our remote reference client sets
     ids = []
@@ -1265,7 +1271,7 @@ end
 
 function interrupt(pid::Integer)
     @assert myid() == 1
-    w = map_pid_wrkr[pid]
+    w = @lock map_pid_wrkr map_pid_wrkr[][pid]
     if isa(w, Worker)
         manage(w.manager, w.id, w.config, :interrupt)
     end
@@ -1305,11 +1311,11 @@ function check_same_host(pids)
         # We checkfirst if all test pids have been started using the local manager,
         # else we check for the same bind_to addr. This handles the special case
         # where the local ip address may change - as during a system sleep/awake
-        if all(p -> (p==1) || (isa(map_pid_wrkr[p].manager, LocalManager)), pids)
+        @lock map_pid_wrkr if all(p -> (p==1) || (isa(map_pid_wrkr[][p].manager, LocalManager)), pids)
             return true
         else
-            first_bind_addr = notnothing(wp_bind_addr(map_pid_wrkr[pids[1]]))
-            return all(p -> notnothing(wp_bind_addr(map_pid_wrkr[p])) == first_bind_addr, pids[2:end])
+            first_bind_addr = notnothing(wp_bind_addr(map_pid_wrkr[][pids[1]]))
+            return all(p -> notnothing(wp_bind_addr(map_pid_wrkr[][p])) == first_bind_addr, pids[2:end])
         end
     end
 end
