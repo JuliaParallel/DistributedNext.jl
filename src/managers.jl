@@ -414,18 +414,9 @@ function manage(manager::SSHManager, id::Integer, config::WorkerConfig, op::Symb
     end
 end
 
-let tunnel_port = 9201
-    global next_tunnel_port
-    function next_tunnel_port()
-        retval = tunnel_port
-        if tunnel_port > 32000
-            tunnel_port = 9201
-        else
-            tunnel_port += 1
-        end
-        retval
-    end
-end
+const tunnel_counter = Threads.Atomic{Int}(1)
+# This is defined such that the port numbers start at 9201 and wrap around at 32,000
+next_tunnel_port() = (Threads.atomic_add!(tunnel_counter, 1) % 22_800) + 9200
 
 
 """

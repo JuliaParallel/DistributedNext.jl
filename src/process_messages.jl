@@ -220,7 +220,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
         if wpid < 1
             println(stderr, e, CapturedException(e, catch_backtrace()))
             println(stderr, "Process($(myid())) - Unknown remote, closing connection.")
-        elseif !(wpid in map_del_wrkr)
+        elseif @lock(map_del_wrkr, !(wpid in map_del_wrkr[]))
             werr = worker_from_id(wpid)
             oldstate = @atomic werr.state
             set_worker_state(werr, W_TERMINATED)
@@ -325,7 +325,7 @@ function handle_msg(msg::IdentifySocketMsg, header, r_stream, w_stream, version)
 end
 
 function handle_msg(msg::IdentifySocketAckMsg, header, r_stream, w_stream, version)
-    w = map_sock_wrkr[r_stream]
+    w = @lock map_sock_wrkr map_sock_wrkr[][r_stream]
     w.version = version
 end
 
@@ -378,7 +378,7 @@ function connect_to_peer(manager::ClusterManager, rpid::Int, wconfig::WorkerConf
 end
 
 function handle_msg(msg::JoinCompleteMsg, header, r_stream, w_stream, version)
-    w = map_sock_wrkr[r_stream]
+    w = @lock map_sock_wrkr map_sock_wrkr[][r_stream]
     environ = something(w.config.environ, Dict())
     environ[:cpu_threads] = msg.cpu_threads
     w.config.environ = environ
