@@ -7,7 +7,7 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
-## Unreleased
+## [v1.2.0] - 2026-03-21
 
 ### Added
 - Implemented callback support for workers being added/removed etc ([#17]).
