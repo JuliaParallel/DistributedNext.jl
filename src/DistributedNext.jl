@@ -23,6 +23,12 @@ using Serialization, Sockets
 import Serialization: serialize, deserialize
 import Sockets: connect, wait_connected
 
+@static if VERSION < v"1.11"
+    using ScopedValues: ScopedValue, @with
+else
+    using Base.ScopedValues: ScopedValue, @with
+end
+
 # NOTE: clusterserialize.jl imports additional symbols from Serialization for use
 
 export

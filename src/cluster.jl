@@ -100,7 +100,15 @@ mutable struct WorkerConfig
     end
 end
 
-@enum WorkerState W_CREATED W_CONNECTED W_TERMINATING W_TERMINATED W_UNKNOWN_STATE
+@enum WorkerState begin
+    WorkerState_created
+    WorkerState_connected
+    WorkerState_terminating    # rmprocs() has been called on the worker
+    WorkerState_terminated     # Worker was gracefully removed
+    WorkerState_exterminated   # Worker was forcefully removed (not by us)
+    WorkerState_unknown
+end
+
 mutable struct Worker
     id::Int
     msg_lock::Threads.ReentrantLock # Lock for del_msgs, add_msgs, and gcflag
@@ -131,7 +139,7 @@ mutable struct Worker
         w.manager = manager
         w.config = config
         w.version = version
-        set_worker_state(w, W_CONNECTED)
+        set_worker_state(w, WorkerState_connected)
         register_worker_streams(w)
         w
     end
@@ -142,7 +150,7 @@ mutable struct Worker
         @lock map_pid_wrkr if haskey(map_pid_wrkr[], id)
             return map_pid_wrkr[][id]
         end
-        w=new(id, Threads.ReentrantLock(), [], [], false, W_CREATED, Threads.Condition(), time(), conn_func)
+        w=new(id, Threads.ReentrantLock(), [], [], false, WorkerState_created, Threads.Condition(), time(), conn_func)
         w.initialized = Event()
         register_worker(w)
         w
@@ -158,8 +166,15 @@ function set_worker_state(w, state)
     end
 end
 
+# Helper function to check if a worker is dead or not. It's recommended to use
+# this instead of checking Worker.state manually.
+function is_worker_dead(w::Worker)
+    state = @atomic w.state
+    return state === WorkerState_terminated || state === WorkerState_exterminated
+end
+
 function check_worker_state(w::Worker)
-    if (@atomic w.state) === W_CREATED
+    if (@atomic w.state) === WorkerState_created
         if !isclusterlazy()
             if PGRP.topology === :all_to_all
                 # Since higher pids connect with lower pids, the remote worker
@@ -198,20 +213,14 @@ function exec_conn_func(w::Worker)
 end
 
 function wait_for_conn(w)
-    if (@atomic w.state) === W_CREATED
+    if (@atomic w.state) === WorkerState_created
         timeout =  worker_timeout() - (time() - w.ct_time)
         timeout <= 0 && error("peer $(w.id) has not connected to $(myid())")
 
-        T = Threads.@spawn begin
-            sleep($timeout)
-            lock(w.c_state) do
-                notify(w.c_state; all=true)
-            end
-        end
-        errormonitor(T)
-        lock(w.c_state) do
-            wait(w.c_state)
-            (@atomic w.state) === W_CREATED && error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
+        if timedwait(() -> (@atomic w.state) === WorkerState_connected, timeout) === :timed_out
+            # Notify any waiters on the state and throw
+            @lock w.c_state notify(w.c_state)
+            error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
         end
     end
     nothing
@@ -464,20 +473,28 @@ end
 ```
 """
 function addprocs(manager::ClusterManager; kwargs...)
+    params = merge(default_addprocs_params(manager), Dict{Symbol, Any}(kwargs))
+
     init_multi()
 
     cluster_mgmt_from_master_check()
 
-    lock(worker_lock)
-    try
-        addprocs_locked(manager::ClusterManager; kwargs...)
-    finally
-        unlock(worker_lock)
-    end
+    # Call worker-starting callbacks
+    warning_interval = params[:callback_warning_interval]
+    _run_callbacks_concurrently("worker-starting", worker_starting_callbacks,
+                                warning_interval, [(manager, params)])
+
+    # Add new workers
+    new_workers = @lock worker_lock addprocs_locked(manager::ClusterManager, params)
+
+    # Call worker-started callbacks
+    _run_callbacks_concurrently("worker-started", worker_started_callbacks,
+                                warning_interval, new_workers)
+
+    return new_workers
 end
 
-function addprocs_locked(manager::ClusterManager; kwargs...)
-    params = merge(default_addprocs_params(manager), Dict{Symbol,Any}(kwargs))
+function addprocs_locked(manager::ClusterManager, params)
     topology(Symbol(params[:topology]))
 
     if PGRP.topology !== :all_to_all
@@ -564,7 +581,8 @@ default_addprocs_params() = Dict{Symbol,Any}(
     :exeflags => ``,
     :env      => [],
     :enable_threaded_blas => false,
-    :lazy => true)
+    :lazy => true,
+    :callback_warning_interval => 10)
 
 
 function setup_launched_worker(manager, wconfig, launched_q)
@@ -673,7 +691,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
             if (jw.id != 1) && (jw.id < w.id)
                 lock(jw.c_state) do
                     # wait for wl to join
-                    if (@atomic jw.state) === W_CREATED
+                    if (@atomic jw.state) === WorkerState_created
                         wait(jw.c_state)
                     end
                 end
@@ -700,7 +718,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
 
         for wl in wlist
             lock(wl.c_state) do
-                if (@atomic wl.state) === W_CREATED
+                if (@atomic wl.state) === WorkerState_created
                     # wait for wl to join
                     wait(wl.c_state)
                 end
@@ -873,12 +891,175 @@ const HDR_COOKIE_LEN = 16
 const map_pid_wrkr = Lockable(Dict{Int, Union{Worker, LocalProcess}}())
 const map_sock_wrkr = Lockable(IdDict())
 const map_del_wrkr = Lockable(Set{Int}())
+const _exited_callback_pid = ScopedValue{Int}(-1)
+const map_pid_statuses = Lockable(Dict{Int, Any}())
+const worker_starting_callbacks = Dict{Any, Base.Callable}()
+const worker_started_callbacks = Dict{Any, Base.Callable}()
+const worker_exiting_callbacks = Dict{Any, Base.Callable}()
+const worker_exited_callbacks = Dict{Any, Base.Callable}()
 
 # whether process is a master or worker in a distributed setup
 myrole() = LPROCROLE[]
 function myrole!(proctype::Symbol)
     LPROCROLE[] = proctype
 end
+
+# Callbacks
+
+function _run_callbacks_concurrently(callbacks_name, callbacks_dict, warning_interval, arglist; catch_exceptions=false)
+    callback_tasks = Tuple{Any, Task}[]
+    for args in arglist
+        for (name, callback) in callbacks_dict
+            push!(callback_tasks, (name, Threads.@spawn callback(args...)))
+        end
+    end
+
+    running_callbacks = () -> ["'$(key)'" for (key, task) in callback_tasks if !istaskdone(task)]
+    while timedwait(() -> isempty(running_callbacks()), warning_interval) === :timed_out
+        callbacks_str = join(running_callbacks(), ", ")
+        @warn "Waiting for these $(callbacks_name) callbacks to finish: $(callbacks_str)"
+    end
+
+    if catch_exceptions
+        for (key, task) in callback_tasks
+            try
+                wait(task)
+            catch ex
+                @error "Error when running $(callbacks_name) callback '$(key)'" exception=(ex, catch_backtrace())
+            end
+        end
+    else
+        # Wait on the tasks so that exceptions bubble up
+        foreach(wait, [x[2] for x in callback_tasks])
+    end
+end
+
+function _add_callback(f, key, dict; arg_types=Tuple{Int})
+    if isnothing(key)
+        key = Symbol(gensym(), nameof(f))
+    end
+
+    desired_signature = "f(" * join(["::$(t)" for t in arg_types.types], ", ") * ")"
+
+    if !hasmethod(f, arg_types)
+        throw(ArgumentError("Callback function is invalid, it must be able to be called with these argument types: $(desired_signature)"))
+    elseif haskey(dict, key)
+        throw(ArgumentError("A callback function with key '$(key)' already exists"))
+    end
+
+    dict[key] = f
+    return key
+end
+
+_remove_callback(key, dict) = delete!(dict, key)
+
+"""
+    add_worker_starting_callback(f::Base.Callable; key=nothing) -> key
+
+Register a callback to be called on the master worker immediately before new
+workers are started. Chooses and returns a unique key for the callback if `key`
+is not specified. The callback `f` will be called with the `ClusterManager`
+instance that is being used and a dictionary of parameters related to adding
+workers, i.e. `f(manager, params)`. The `params` dictionary is specific to the
+`manager` type. Note that the `LocalManager` and `SSHManager` cluster managers
+in DistributedNext are not fully documented yet, see the
+[managers.jl](https://github.com/JuliaParallel/DistributedNext.jl/blob/master/src/managers.jl)
+file for their definitions.
+
+!!! warning
+    Adding workers can fail so it is not guaranteed that the workers requested
+    in `manager` will exist in the future. e.g. if a worker is requested on a
+    node that is unreachable then the worker-starting callbacks will be called
+    but the worker will never be added.
+
+The worker-starting callbacks will be executed concurrently. If one throws an
+exception it will not be caught and will be rethrown by [`addprocs`](@ref).
+
+Keep in mind that the callbacks will add to the time taken to launch workers; so
+try to either keep the callbacks fast to execute, or do the actual work
+asynchronously by spawning a task in the callback (beware of race conditions if
+you do this).
+"""
+add_worker_starting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_starting_callbacks;
+                                                                            arg_types=Tuple{ClusterManager, Dict})
+"""
+    remove_worker_starting_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_starting_callback()`](@ref).
+"""
+remove_worker_starting_callback(key) = _remove_callback(key, worker_starting_callbacks)
+
+"""
+    add_worker_started_callback(f::Base.Callable; key=nothing) -> key
+
+Register a callback to be called on the master worker whenever a worker has
+been added. The callback will be called with the added worker ID,
+e.g. `f(w::Int)`. Chooses and returns a unique key for the callback if `key` is
+not specified.
+
+The worker-started callbacks will be executed concurrently. If one throws an
+exception it will not be caught and will be rethrown by [`addprocs()`](@ref).
+
+Keep in mind that the callbacks will add to the time taken to launch workers; so
+try to either keep the callbacks fast to execute, or do the actual
+initialization asynchronously by spawning a task in the callback (beware of race
+conditions if you do this).
+"""
+add_worker_started_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_started_callbacks)
+
+"""
+    remove_worker_started_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_started_callback()`](@ref).
+"""
+remove_worker_started_callback(key) = _remove_callback(key, worker_started_callbacks)
+
+"""
+    add_worker_exiting_callback(f::Base.Callable; key=nothing) -> key
+
+Register a callback to be called on the master worker immediately before a
+worker is removed with [`rmprocs()`](@ref). The callback will be called with the
+worker ID, e.g. `f(w::Int)`. Chooses and returns a unique key for the callback
+if `key` is not specified.
+
+All worker-exiting callbacks will be executed concurrently and if they don't
+all finish before the `callback_timeout` passed to `rmprocs()` then the worker
+will be removed anyway.
+"""
+add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exiting_callbacks)
+
+"""
+    remove_worker_exiting_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_exiting_callback()`](@ref).
+"""
+remove_worker_exiting_callback(key) = _remove_callback(key, worker_exiting_callbacks)
+
+"""
+    add_worker_exited_callback(f::Base.Callable; key=nothing) -> key
+
+Register a callback to be called on the master worker when a worker has exited
+for any reason (i.e. not only because of [`rmprocs()`](@ref) but also the worker
+segfaulting etc). Chooses and returns a unique key for the callback if `key` is
+not specified.
+
+The callback will be called with the worker ID and the final
+`Distributed.WorkerState` of the worker, e.g. `f(w::Int, state)`. `state` is
+an enum, a value of `WorkerState_terminated` means a graceful exit and a value
+of `WorkerState_exterminated` means the worker died unexpectedly.
+
+All worker-exited callbacks will be executed concurrently. If a callback throws
+an exception it will be caught and printed.
+"""
+add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, worker_exited_callbacks;
+                                                                          arg_types=Tuple{Int, WorkerState})
+
+"""
+    remove_worker_exited_callback(key)
+
+Remove the callback for `key` that was added with [`add_worker_exited_callback()`](@ref).
+"""
+remove_worker_exited_callback(key) = _remove_callback(key, worker_exited_callbacks)
 
 # cluster management related API
 """
@@ -918,7 +1099,7 @@ function nprocs()
         n = length(PGRP.workers)
         # filter out workers in the process of being setup/shutdown.
         for jw in PGRP.workers
-            if !isa(jw, LocalProcess) && ((@atomic jw.state) !== W_CONNECTED)
+            if !isa(jw, LocalProcess) && ((@atomic jw.state) !== WorkerState_connected)
                 n = n - 1
             end
         end
@@ -971,7 +1152,7 @@ julia> procs()
 function procs()
     if myid() == 1 || (PGRP.topology === :all_to_all  && !isclusterlazy())
         # filter out workers in the process of being setup/shutdown.
-        return Int[x.id for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === W_CONNECTED)]
+        return Int[x.id for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
     else
         return Int[x.id for x in PGRP.workers]
     end
@@ -988,7 +1169,7 @@ other_procs() = filter(!=(myid()), procs())
 function id_in_procs(id)  # faster version of `id in procs()`
     if myid() == 1 || (PGRP.topology === :all_to_all  && !isclusterlazy())
         for x in PGRP.workers
-            if (x.id::Int) == id && (isa(x, LocalProcess) || (@atomic (x::Worker).state) === W_CONNECTED)
+            if (x.id::Int) == id && (isa(x, LocalProcess) || (@atomic (x::Worker).state) === WorkerState_connected)
                 return true
             end
         end
@@ -1012,7 +1193,7 @@ See also [`other_procs()`](@ref).
 """
 function procs(pid::Integer)
     if myid() == 1
-        all_workers = [x for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === W_CONNECTED)]
+        all_workers = [x for x in PGRP.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
         if (pid == 1) || (isa(@lock(map_pid_wrkr, map_pid_wrkr[][pid].manager), LocalManager))
             Int[x.id for x in filter(w -> (w.id==1) || (isa(w.manager, LocalManager)), all_workers)]
         else
@@ -1059,6 +1240,112 @@ Identical to [`workers()`](@ref) except that the current worker is filtered out.
 """
 other_workers() = filter(!=(myid()), workers())
 
+"""
+    @setstatus! x
+    @setstatus! x pid
+
+Set the status for the calling module on worker `pid` (defaults to the current
+worker) to `x`. `x` may be any serializable object but it's recommended to keep
+it small enough to cheaply send over a network. Statuses can be retrieved inside
+worker-exited callbacks (see [`add_worker_exited_callback`](@ref)) before the
+worker is fully deregistered.
+
+Statuses are keyed by the calling `Module`, so multiple libraries can
+independently track their own status on the same worker without conflicting.
+
+This can be handy if you want a way to know what a worker is doing at any given
+time, or (in combination with a worker-exited callback) for knowing what a
+worker was last doing before it died.
+
+# Examples
+```julia-repl
+julia> DistributedNext.@setstatus! "working on dataset 42"
+"working on dataset 42"
+
+julia> DistributedNext.@getstatus
+"working on dataset 42"
+```
+
+See also [`setstatus!`](@ref) for the function form that accepts an explicit module key.
+"""
+macro setstatus!(x)
+    mod = __module__
+    :(setstatus!($(esc(x)), $mod))
+end
+
+macro setstatus!(x, pid)
+    mod = __module__
+    :(setstatus!($(esc(x)), $mod, $(esc(pid))))
+end
+
+"""
+    setstatus!(x, mod::Module, pid::Int=myid())
+
+Function form of [`@setstatus!`](@ref). Sets the status for module `mod` on
+worker `pid` to `x`.
+"""
+function setstatus!(x, mod::Module, pid::Int=myid())
+    if !id_in_procs(pid)
+        throw(ArgumentError("Worker $(pid) does not exist, cannot set its status"))
+    end
+
+    if myid() == 1
+        @lock map_pid_statuses begin
+            statuses = get!(map_pid_statuses[], pid, Dict{Module, Any}())
+            statuses[mod] = x
+        end
+    else
+        remotecall_fetch(setstatus!, 1, x, mod, myid())
+    end
+end
+
+function _getstatus(pid, mod)
+    @lock map_pid_statuses begin
+        statuses = get(map_pid_statuses[], pid, nothing)
+        isnothing(statuses) ? nothing : get(statuses, mod, nothing)
+    end
+end
+
+"""
+    @getstatus
+    @getstatus pid
+
+Get the status set by the calling module for worker `pid` (defaults to the
+current worker). If one was never explicitly set with [`@setstatus!`](@ref)
+this will return `nothing`.
+
+See also [`getstatus`](@ref) for the function form.
+"""
+macro getstatus()
+    mod = __module__
+    :(getstatus($mod))
+end
+macro getstatus(pid)
+    mod = __module__
+    :(getstatus($mod, $(esc(pid))))
+end
+
+"""
+    getstatus(mod::Module, pid::Int=myid())
+
+Function form of [`@getstatus`](@ref). Gets the status for module `mod` on
+worker `pid`. Returns `nothing` if no status was set.
+"""
+function getstatus(mod::Module, pid::Int=myid())
+    # During the worker-exited callbacks this function may be called, at which
+    # point it will not exist in procs(). Thus we check whether the function is
+    # being called for an exited worker and allow it if so.
+    if !id_in_procs(pid) && _exited_callback_pid[] != pid
+        throw(ArgumentError("Worker $(pid) does not exist, cannot get its status"))
+    end
+
+    if myid() == 1
+        _getstatus(pid, mod)
+    else
+        remotecall_fetch(getstatus, 1, mod, pid)
+    end
+end
+
 function cluster_mgmt_from_master_check()
     if myid() != 1
         throw(ErrorException("Only process 1 can add and remove workers"))
@@ -1066,7 +1353,7 @@ function cluster_mgmt_from_master_check()
 end
 
 """
-    rmprocs(pids...; waitfor=typemax(Int))
+    rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
 
 Remove the specified workers. Note that only process 1 can add or remove
 workers.
@@ -1079,6 +1366,10 @@ Argument `waitfor` specifies how long to wait for the workers to shut down:
     scheduled for removal in a different task. The scheduled [`Task`](@ref) object is
     returned. The user should call [`wait`](@ref) on the task before invoking any other
     parallel calls.
+
+The `callback_timeout` specifies how long to wait for any callbacks to execute
+before continuing to remove the workers (see
+[`add_worker_exiting_callback()`](@ref)).
 
 # Examples
 ```julia-repl
@@ -1096,24 +1387,38 @@ julia> workers()
  6
 ```
 """
-function rmprocs(pids...; waitfor=typemax(Int))
+function rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
     cluster_mgmt_from_master_check()
 
     pids = vcat(pids...)
     if waitfor == 0
-        t = @async _rmprocs(pids, typemax(Int))
+        t = @async _rmprocs(pids, typemax(Int), callback_timeout)
         yield()
         return t
     else
-        _rmprocs(pids, waitfor)
+        _rmprocs(pids, waitfor, callback_timeout)
         # return a dummy task object that user code can wait on.
         return @async nothing
     end
 end
 
-function _rmprocs(pids, waitfor)
+function _rmprocs(pids, waitfor, callback_timeout)
     lock(worker_lock)
     try
+        # Run the callbacks
+        callback_tasks = Tuple{Any, Task}[]
+        for pid in pids
+            for (name, callback) in worker_exiting_callbacks
+                push!(callback_tasks, (name, Threads.@spawn callback(pid)))
+            end
+        end
+
+        if timedwait(() -> all(istaskdone, [x[2] for x in callback_tasks]), callback_timeout) === :timed_out
+            timedout_callbacks = ["'$(key)'" for (key, task) in callback_tasks if !istaskdone(task)]
+            callbacks_str = join(timedout_callbacks, ", ")
+            @warn "Some worker-exiting callbacks have not yet finished, continuing to remove workers anyway. These are the callbacks still running: $(callbacks_str)"
+        end
+
         rmprocset = Union{LocalProcess, Worker}[]
         for p in pids
             if p == 1
@@ -1121,7 +1426,7 @@ function _rmprocs(pids, waitfor)
             else
                 w = @lock map_pid_wrkr get(map_pid_wrkr[], p, nothing)
                 if !isnothing(w)
-                    set_worker_state(w, W_TERMINATING)
+                    set_worker_state(w, WorkerState_terminating)
                     kill(w.manager, p, w.config)
                     push!(rmprocset, w)
                 end
@@ -1130,11 +1435,11 @@ function _rmprocs(pids, waitfor)
 
         start = time_ns()
         while (time_ns() - start) < waitfor*1e9
-            all(w -> (@atomic w.state) === W_TERMINATED, rmprocset) && break
+            all(is_worker_dead, rmprocset) && break
             sleep(min(0.1, waitfor - (time_ns() - start)/1e9))
         end
 
-        unremoved = [wrkr.id for wrkr in filter(w -> (@atomic w.state) !== W_TERMINATED, rmprocset)]
+        unremoved = [wrkr.id for wrkr in filter(!is_worker_dead, rmprocset)]
         if length(unremoved) > 0
             estr = string("rmprocs: pids ", unremoved, " not terminated after ", waitfor, " seconds.")
             throw(ErrorException(estr))
@@ -1232,7 +1537,7 @@ function deregister_worker(pg, pid)
             # Notify the cluster manager of this workers death
             manage(w.manager, w.id, w.config, :deregister)
             if PGRP.topology !== :all_to_all || isclusterlazy()
-                for rpid in workers()
+                for rpid in other_workers()
                     try
                         remote_do(deregister_worker, rpid, pid)
                     catch
@@ -1265,6 +1570,25 @@ function deregister_worker(pg, pid)
             delete!(pg.refs, id)
         end
     end
+
+    if myid() == 1
+        params = default_addprocs_params(w.manager)
+        warning_interval = params[:callback_warning_interval]
+
+        # Call callbacks on the master, with the scoped value set so that
+        # getstatus() can be called for the exiting worker without failing the
+        # pid check. We go to some effort to make sure this works after
+        # deregistering the worker because if it's called beforehand the worker
+        # will incorrectly be shown in e.g. procs().
+        @with _exited_callback_pid => pid begin
+            _run_callbacks_concurrently("worker-exited", worker_exited_callbacks,
+                                        warning_interval, [(pid, w.state)]; catch_exceptions=true)
+        end
+
+        # Delete its statuses
+        @lock map_pid_statuses delete!(map_pid_statuses[], pid)
+    end
+
     return
 end
 

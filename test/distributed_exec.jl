@@ -1,7 +1,9 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+import Revise
 using DistributedNext, Random, Serialization, Sockets
-import DistributedNext: launch, manage
+import DistributedNext
+import DistributedNext: launch, manage, getstatus, setstatus!, @getstatus, @setstatus!
 
 
 @test cluster_cookie() isa String
@@ -1824,7 +1826,9 @@ end
     let julia = `$(Base.julia_cmd()) --startup-file=no`; mktempdir() do tmp
         pkg_project = joinpath(Base.pkgdir(DistributedNext), "Project.toml")
         project = mkdir(joinpath(tmp, "project"))
-        depots = [mkdir(joinpath(tmp, "depot1")), mkdir(joinpath(tmp, "depot2"))]
+        # Keep the writable depot in the depots list so that external
+        # dependencies (i.e. ScopedValues.jl) can be loaded.
+        depots = [mkdir(joinpath(tmp, "depot1")), mkdir(joinpath(tmp, "depot2")), Base.DEPOT_PATH[1]]
         load_path = [mkdir(joinpath(tmp, "load_path")), "@stdlib", "@", pkg_project]
         pathsep = Sys.iswindows() ? ";" : ":"
         env = Dict(
@@ -1933,7 +1937,7 @@ end
         project = mktempdir()
         env = Dict(
             "JULIA_LOAD_PATH" => string(LOAD_PATH[1], $(repr(pathsep)), "@stdlib", $(repr(pathsep)), "$(escaped_pkg_project)"),
-            "JULIA_DEPOT_PATH" => DEPOT_PATH[1],
+            "JULIA_DEPOT_PATH" => DEPOT_PATH[end],
             "TMPDIR" => ENV["TMPDIR"],
         )
         addprocs(1; env = env, exeflags = `--project=\$(project)`)
@@ -1941,7 +1945,7 @@ end
         addprocs(1; env = env)
         """ * funcscode * """
         for w in workers()
-            @test remotecall_fetch(depot_path, w)          == [DEPOT_PATH[1]]
+            @test remotecall_fetch(depot_path, w)          == [DEPOT_PATH[end]]
             @test remotecall_fetch(load_path, w)           == [LOAD_PATH[1], "@stdlib", "$(escaped_pkg_project)"]
             @test remotecall_fetch(active_project, w)      == project
             @test remotecall_fetch(Base.active_project, w) == joinpath(project, "Project.toml")
@@ -1956,7 +1960,9 @@ include("splitrange.jl")
 
 @testset "Clear all workers for timeout tests (issue #45785)" begin
     nprocs() > 1 && rmprocs(workers())
-    begin
+
+    # This test requires kill(), and that doesn't work on Windows before 1.11
+    if !(Sys.iswindows() && VERSION < v"1.11")
         # First, assert that we get no messages when we close a cooperative worker
         w = only(addprocs(1))
         @test_nowarn begin
@@ -1974,8 +1980,198 @@ include("splitrange.jl")
             end
             wait(rmprocs([w]))
         end
+    else
+        @warn "Skipping timeout tests because kill() isn't supported on Windows for this Julia version"
     end
 end
+
+@testset "Worker statuses" begin
+    rmprocs(other_workers())
+
+    # Test with the local worker using macros
+    @test isnothing(@getstatus())
+    @setstatus!("foo")
+    @test @getstatus() == "foo"
+    @test_throws ArgumentError getstatus(Main, 2)
+
+    # Test with a remote worker using the function form
+    pid = only(addprocs(1))
+    @test isnothing(getstatus(Main, pid))
+    remotecall_wait(setstatus!, pid, "bar", Main, pid)
+    @test remotecall_fetch(getstatus, pid, Main) == "bar"
+
+    # Test that different modules have independent statuses
+    setstatus!("from_main", Main, pid)
+    setstatus!("from_distributed", DistributedNext, pid)
+    @test getstatus(Main, pid) == "from_main"
+    @test getstatus(DistributedNext, pid) == "from_distributed"
+
+    rmprocs(pid)
+end
+
+@testset "Worker state callbacks" begin
+    # Helper function to wait for a worker to have been completely deregistered
+    # (including worker-exited callbacks finished) by waiting for the workers
+    # status to have been deleted. Only works if the worker has a status of
+    # course.
+    function wait_for_deregistration(pid)
+        statuses = DistributedNext.map_pid_statuses
+        @test timedwait(() -> @lock(statuses, !haskey(statuses[], pid)), 10) == :ok
+    end
+
+    rmprocs(other_workers())
+
+    # Adding a callback with an invalid signature should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(() -> nothing)
+
+    # Smoke test to ensure that all the callbacks are executed
+    starting_managers = []
+    started_workers = Int[]
+    exiting_workers = Int[]
+    exited_workers = []
+    starting_key = DistributedNext.add_worker_starting_callback((manager, kwargs) -> push!(starting_managers, manager))
+    started_key = DistributedNext.add_worker_started_callback(pid -> (push!(started_workers, pid); error("foo")))
+    exiting_key = DistributedNext.add_worker_exiting_callback(pid -> push!(exiting_workers, pid))
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> push!(exited_workers, (pid, state)))
+
+    # Test that the worker-started exception bubbles up
+    @test_throws TaskFailedException addprocs(1)
+
+    pid = only(workers())
+    @test only(starting_managers) isa DistributedNext.LocalManager
+    @test started_workers == [pid]
+    rmprocs(workers())
+    @test exiting_workers == [pid]
+    @test exited_workers == [(pid, DistributedNext.WorkerState_terminated)]
+
+    # Trying to reset an existing callback should fail
+    @test_throws ArgumentError DistributedNext.add_worker_started_callback(Returns(nothing); key=started_key)
+
+    # Remove the callbacks
+    DistributedNext.remove_worker_starting_callback(starting_key)
+    DistributedNext.remove_worker_started_callback(started_key)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that the worker-exiting `callback_timeout` option works and that we
+    # get warnings about slow worker-started callbacks.
+    event = Base.Event()
+    callback_task = nothing
+    started_key = DistributedNext.add_worker_started_callback(_ -> sleep(0.5))
+    exiting_key = DistributedNext.add_worker_exiting_callback(_ -> (callback_task = current_task(); wait(event)))
+
+    @test_logs (:warn, r"Waiting for these worker-started callbacks.+") match_mode=:any addprocs(1; callback_warning_interval=0.05)
+    DistributedNext.remove_worker_started_callback(started_key)
+
+    @test_logs (:warn, r"Some worker-exiting callbacks have not yet finished.+") rmprocs(workers(); callback_timeout=0.5)
+    DistributedNext.remove_worker_exiting_callback(exiting_key)
+
+    notify(event)
+    wait(callback_task)
+
+    # Test that the initial callbacks were indeed removed
+    @test length(starting_managers) == 1
+    @test length(started_workers) == 1
+    @test length(exiting_workers) == 1
+    @test length(exited_workers) == 1
+
+    # Test that workers that were killed forcefully are detected as such, and
+    # that statuses can be retrieved in the callback.
+    exit_state = nothing
+    last_status = nothing
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> (exit_state = state; last_status = @getstatus(pid)))
+    pid = only(addprocs(1))
+    @setstatus!("foo", pid)
+
+    # Kill the process with stderr redirected so the error messages don't
+    # unnecessarily show up in the logs.
+    redirect_stderr(devnull) do
+        remote_do(exit, pid)
+        wait_for_deregistration(pid)
+    end
+    @test exit_state == DistributedNext.WorkerState_exterminated
+    @test last_status == "foo"
+    DistributedNext.remove_worker_exited_callback(exited_key)
+
+    # Test that exceptions in worker-exited callbacks are caught
+    exited_key = DistributedNext.add_worker_exited_callback((pid, state) -> error("foo"))
+    @test_logs (:error, r"Error when running worker-exited callback.+") match_mode=:any begin
+        pid = only(addprocs(1))
+        # Set a dummy status so that wait_for_deregistration() works
+        @setstatus!("foo", pid)
+        rmprocs(pid)
+
+        wait_for_deregistration(pid)
+    end
+    DistributedNext.remove_worker_exited_callback(exited_key)
+end
+
+# This is a simplified copy of a test from Revise.jl's tests
+@testset "Revise.jl integration" begin
+    function rm_precompile(pkgname::AbstractString)
+        filepath = Base.cache_file_entry(Base.PkgId(pkgname))
+        isa(filepath, Tuple) && (filepath = filepath[1]*filepath[2])  # Julia 1.3+
+        for depot in DEPOT_PATH
+            fullpath = joinpath(depot, filepath)
+            isfile(fullpath) && rm(fullpath)
+        end
+    end
+
+    pid = only(addprocs(1))
+
+    # Test that initialization succeeds by checking that Main.whichtt is defined
+    # on the worker, which is defined by Revise.init_worker().
+    @test timedwait(() ->remotecall_fetch(() -> hasproperty(Main, :whichtt), pid), 10) == :ok
+
+    tmpdir = mktempdir()
+    @everywhere push!(LOAD_PATH, $tmpdir)  # Don't want to share this LOAD_PATH
+
+    # Create a fake package
+    module_file = joinpath(tmpdir, "ReviseDistributed", "src", "ReviseDistributed.jl")
+    mkpath(dirname(module_file))
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = π
+          g(::Int) = 0
+
+          end
+          """)
+
+    # Check that we can use it
+    @everywhere using ReviseDistributed
+    for p in procs()
+        @test remotecall_fetch(ReviseDistributed.f, p)    == π
+        @test remotecall_fetch(ReviseDistributed.g, p, 1) == 0
+    end
+
+    # Test changing and deleting methods
+    write(module_file,
+          """
+          module ReviseDistributed
+
+          f() = 3.0
+
+          end
+          """)
+    for p in procs()
+        # We call Revise.revise() inside the timedwait() because file events
+        # on macOS can have significant latency, meaning a single revise() call
+        # may not pick up the changes yet.
+        @test timedwait(10; pollint=0.5) do
+            Revise.revise()
+            remotecall_fetch(ReviseDistributed.f, p) == 3.0
+        end == :ok
+
+        @test_throws RemoteException remotecall_fetch(ReviseDistributed.g, p, 1)
+    end
+
+    rmprocs(workers())
+    rm_precompile("ReviseDistributed")
+    pop!(LOAD_PATH)
+end
+
 
 # Run topology tests last after removing all workers, since a given
 # cluster at any time only supports a single topology.

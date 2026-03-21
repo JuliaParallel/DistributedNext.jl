@@ -35,5 +35,5 @@ include("managers.jl")
 include("distributed_stdlib_detection.jl")
 
 @testset "Aqua" begin
-    Aqua.test_all(DistributedNext)
+    Aqua.test_all(DistributedNext; stale_deps=(; ignore=[:ScopedValues]))
 end
