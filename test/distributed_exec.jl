@@ -2040,7 +2040,9 @@ end
     pid = only(workers())
     @test only(starting_managers) isa DistributedNext.LocalManager
     @test started_workers == [pid]
+    @setstatus!("foo", pid)
     rmprocs(workers())
+    wait_for_deregistration(pid)
     @test exiting_workers == [pid]
     @test exited_workers == [(pid, DistributedNext.WorkerState_terminated)]
 
