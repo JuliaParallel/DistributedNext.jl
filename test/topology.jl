@@ -44,7 +44,7 @@ using Random
         exename = params[:exename]
         exeflags = params[:exeflags]
 
-        cmd = `$exename $exeflags --bind-to $(DistributedNext.LPROC.bind_addr) $(DistributedNext.get_worker_arg())`
+        cmd = `$exename $exeflags --bind-to $(DistributedNext.CTX.lproc.bind_addr) $(DistributedNext.get_worker_arg())`
         cmd = pipeline(detach(setenv(cmd, dir=dir)))
         for i in 1:manager.np
             io = open(cmd, "r+")
@@ -101,7 +101,7 @@ using Random
         @everywhere if !isdefined(Main, :count_connected_workers)
             function count_connected_workers()
                 count(x -> isa(x, DistributedNext.Worker) && isdefined(x, :r_stream) && isopen(x.r_stream),
-                      DistributedNext.PGRP.workers)
+                      DistributedNext.CTX.pgrp.workers)
             end
         end
     end
