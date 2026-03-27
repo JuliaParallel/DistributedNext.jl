@@ -7,6 +7,14 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## Unreleased
+
+### Changed
+- The internals were completely refactored to move all global variables into a
+  single struct ([#61]). This should not be a user-visible change, but of course
+  it's possible that some things slipped through the cracks so please open an
+  issue if you encounter any bugs.
+
 ## [v1.2.0] - 2026-03-21
 
 ### Added

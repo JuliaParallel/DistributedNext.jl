@@ -27,32 +27,27 @@ mutable struct ClusterSerializer{I<:IO} <: AbstractSerializer
 end
 ClusterSerializer(io::IO) = ClusterSerializer{typeof(io)}(io)
 
-const object_numbers = WeakKeyDict()
-const obj_number_salt = Ref(0)
 function object_number(s::ClusterSerializer, @nospecialize(l))
-    global obj_number_salt, object_numbers
-    if haskey(object_numbers, l)
-        return object_numbers[l]
+    if haskey(CTX.object_numbers, l)
+        return CTX.object_numbers[l]
     end
     # a hash function that always gives the same number to the same
     # object on the same machine, and is unique over all machines.
-    ln = obj_number_salt[]+(UInt64(myid())<<44)
-    obj_number_salt[] += 1
-    object_numbers[l] = ln
+    ln = CTX.obj_number_salt[]+(UInt64(myid())<<44)
+    CTX.obj_number_salt[] += 1
+    CTX.object_numbers[l] = ln
     return ln::UInt64
 end
 
-const known_object_data = Dict{UInt64,Any}()
-
 function lookup_object_number(s::ClusterSerializer, n::UInt64)
-    return get(known_object_data, n, nothing)
+    return get(CTX.known_object_data, n, nothing)
 end
 
 function remember_object(s::ClusterSerializer, @nospecialize(o), n::UInt64)
-    known_object_data[n] = o
-    if isa(o, Core.TypeName) && !haskey(object_numbers, o)
+    CTX.known_object_data[n] = o
+    if isa(o, Core.TypeName) && !haskey(CTX.object_numbers, o)
         # set up reverse mapping for serialize
-        object_numbers[o] = n
+        CTX.object_numbers[o] = n
     end
     return nothing
 end

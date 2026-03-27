@@ -5,16 +5,6 @@ import Base: eltype
 abstract type AbstractRemoteRef end
 
 """
-    client_refs
-
-Tracks whether a particular `AbstractRemoteRef`
-(identified by its RRID) exists on this worker.
-
-The `client_refs` lock is also used to synchronize access to `.refs` and associated `clientset` state.
-"""
-const client_refs = WeakKeyDict{AbstractRemoteRef, Nothing}() # used as a WeakKeySet
-
-"""
     Future(w::Int, rrid::RRID, v::Union{Some, Nothing}=nothing)
 
 A `Future` is a placeholder for a single computation
@@ -67,7 +57,7 @@ mutable struct RemoteChannel{T<:AbstractChannel} <: AbstractRemoteRef
 end
 
 function test_existing_ref(r::AbstractRemoteRef)
-    found = getkey(client_refs, r, nothing)
+    found = getkey(CTX.client_refs, r, nothing)
     if found !== nothing
         @assert r.where > 0
         if isa(r, Future)
@@ -85,16 +75,16 @@ function test_existing_ref(r::AbstractRemoteRef)
         return found::typeof(r)
     end
 
-    client_refs[r] = nothing
+    CTX.client_refs[r] = nothing
     finalizer(finalize_ref, r)
     return r
 end
 
 function finalize_ref(r::AbstractRemoteRef)
     if r.where > 0 # Handle the case of the finalizer having been called manually
-        if trylock(client_refs.lock) # trylock doesn't call wait which causes yields
+        if trylock(CTX.client_refs.lock) # trylock doesn't call wait which causes yields
             try
-                delete!(client_refs.ht, r) # direct removal avoiding locks
+                delete!(CTX.client_refs.ht, r) # direct removal avoiding locks
                 if isa(r, RemoteChannel)
                     send_del_client_no_lock(r)
                 else
@@ -105,7 +95,7 @@ function finalize_ref(r::AbstractRemoteRef)
                 end
                 r.where = 0
             finally
-                unlock(client_refs.lock)
+                unlock(CTX.client_refs.lock)
             end
         else
             finalizer(finalize_ref, r)
@@ -170,8 +160,8 @@ A low-level API which returns the backing `AbstractChannel` for an `id` returned
 The call is valid only on the node where the backing channel exists.
 """
 function channel_from_id(id)
-    rv = lock(client_refs) do
-        return get(PGRP.refs, id, false)
+    rv = lock(CTX.client_refs) do
+        return get(CTX.pgrp.refs, id, false)
     end
     if rv === false
         throw(ErrorException("Local instance of remote reference not found"))
@@ -179,9 +169,9 @@ function channel_from_id(id)
     return rv.c
 end
 
-lookup_ref(rrid::RRID, f=def_rv_channel) = lookup_ref(PGRP, rrid, f)
+lookup_ref(rrid::RRID, f=def_rv_channel) = lookup_ref(CTX.pgrp, rrid, f)
 function lookup_ref(pg, rrid, f)
-    return lock(client_refs) do
+    return lock(CTX.client_refs) do
         rv = get(pg.refs, rrid, false)
         if rv === false
             # first we've heard of this ref
@@ -240,9 +230,9 @@ end
 
 del_client(rr::AbstractRemoteRef) = del_client(remoteref_id(rr), myid())
 
-del_client(id, client) = del_client(PGRP, id, client)
+del_client(id, client) = del_client(CTX.pgrp, id, client)
 function del_client(pg, id, client)
-    lock(client_refs) do
+    lock(CTX.client_refs) do
         _del_client(pg, id, client)
     end
     nothing
@@ -271,14 +261,13 @@ end
 # and `send_add_client`.
 # XXX: Is this worth the additional complexity?
 #      `flush_gc_msgs` has to iterate over all connected workers.
-const any_gc_flag = Threads.Condition()
 function start_gc_msgs_task()
     errormonitor(
         Threads.@spawn begin
             while true
-                lock(any_gc_flag) do
+                lock(CTX.any_gc_flag) do
                     # this might miss events
-                    wait(any_gc_flag)
+                    wait(CTX.any_gc_flag)
                 end
                 # Use invokelatest() so that custom message transport streams
                 # for workers can be defined in a newer world age than the Task
@@ -301,7 +290,7 @@ end
 function send_del_client_no_lock(rr)
     # for gc context to avoid yields
     if rr.where == myid()
-        _del_client(PGRP, remoteref_id(rr), myid())
+        _del_client(CTX.pgrp, remoteref_id(rr), myid())
     elseif id_in_procs(rr.where) # process only if a valid worker
         process_worker(rr)
     end
@@ -312,8 +301,8 @@ function publish_del_msg!(w::Worker, msg)
         push!(w.del_msgs, msg)
         @atomic w.gcflag = true
     end
-    lock(any_gc_flag) do
-        notify(any_gc_flag)
+    lock(CTX.any_gc_flag) do
+        notify(CTX.any_gc_flag)
     end
 end
 
@@ -331,7 +320,7 @@ function process_worker(rr)
 end
 
 function add_client(id, client)
-    lock(client_refs) do
+    lock(CTX.client_refs) do
         rv = lookup_ref(id)
         push!(rv.clientset, client)
     end
@@ -356,8 +345,8 @@ function send_add_client(rr::AbstractRemoteRef, i)
             push!(w.add_msgs, (remoteref_id(rr), i))
             @atomic w.gcflag = true
         end
-        lock(any_gc_flag) do
-            notify(any_gc_flag)
+        lock(CTX.any_gc_flag) do
+            notify(CTX.any_gc_flag)
         end
     end
 end
@@ -459,8 +448,8 @@ function remotecall_fetch(f, w::Worker, args...; kwargs...)
     rv.waitingfor = w.id
     send_msg(w, MsgHeader(RRID(0,0), oid), CallMsg{:call_fetch}(f, args, kwargs))
     v = take!(rv)
-    lock(client_refs) do
-        delete!(PGRP.refs, oid)
+    lock(CTX.client_refs) do
+        delete!(CTX.pgrp.refs, oid)
     end
     return isa(v, RemoteException) ? throw(v) : v
 end
@@ -501,8 +490,8 @@ function remotecall_wait(f, w::Worker, args...; kwargs...)
     rr = Future(w)
     send_msg(w, MsgHeader(remoteref_id(rr), prid), CallWaitMsg(f, args, kwargs))
     v = fetch(rv.c)
-    lock(client_refs) do
-        delete!(PGRP.refs, prid)
+    lock(CTX.client_refs) do
+        delete!(CTX.pgrp.refs, prid)
     end
     isa(v, RemoteException) && throw(v)
     return rr

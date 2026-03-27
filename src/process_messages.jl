@@ -81,9 +81,9 @@ function run_work_thunk_remotevalue(rv::RemoteValue, thunk)
 end
 
 function schedule_call(rid, thunk)
-    return lock(client_refs) do
+    return lock(CTX.client_refs) do
         rv = RemoteValue(def_rv_channel())
-        (PGRP::ProcessGroup).refs[rid] = rv
+        (CTX.pgrp::ProcessGroup).refs[rid] = rv
         push!(rv.clientset, rid.whence)
         errormonitor(@async run_work_thunk_remotevalue(rv, thunk))
         return rv
@@ -220,7 +220,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
         if wpid < 1
             println(stderr, e, CapturedException(e, catch_backtrace()))
             println(stderr, "Process($(myid())) - Unknown remote, closing connection.")
-        elseif @lock(map_del_wrkr, !(wpid in map_del_wrkr[]))
+        elseif @lock(CTX.map_del_wrkr, !(wpid in CTX.map_del_wrkr[]))
             werr = worker_from_id(wpid)
             oldstate = @atomic werr.state
             set_worker_state(werr, oldstate != WorkerState_terminating ? WorkerState_exterminated : WorkerState_terminated)
@@ -318,24 +318,24 @@ function handle_msg(msg::IdentifySocketMsg, header, r_stream, w_stream, version)
     throw_if_cluster_manager_unassigned()
 
     # register a new peer worker connection
-    w = Worker(msg.from_pid, r_stream, w_stream, cluster_manager[]; version=version)::Worker
+    w = Worker(msg.from_pid, r_stream, w_stream, CTX.cluster_manager[]; version=version)::Worker
     send_connection_hdr(w, false)
     send_msg_now(w, MsgHeader(), IdentifySocketAckMsg())
     notify(w.initialized)
 end
 
 function handle_msg(msg::IdentifySocketAckMsg, header, r_stream, w_stream, version)
-    w = @lock map_sock_wrkr map_sock_wrkr[][r_stream]
+    w = @lock CTX.map_sock_wrkr CTX.map_sock_wrkr[][r_stream]
     w.version = version
 end
 
 function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
     throw_if_cluster_manager_unassigned()
 
-    LPROC.id = msg.self_pid
-    controller = Worker(1, r_stream, w_stream, cluster_manager[]; version=version)::Worker
+    CTX.lproc.id = msg.self_pid
+    controller = Worker(1, r_stream, w_stream, CTX.cluster_manager[]; version=version)::Worker
     notify(controller.initialized)
-    register_worker(LPROC)
+    register_worker(CTX.lproc)
     topology(msg.topology)
 
     if !msg.enable_threaded_blas
@@ -343,7 +343,7 @@ function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
     end
 
     lazy = msg.lazy
-    PGRP.lazy = lazy
+    CTX.pgrp.lazy = lazy
 
     @sync for (connect_at, rpid) in msg.other_workers
         wconfig = WorkerConfig()
@@ -352,9 +352,9 @@ function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
         let rpid=rpid, wconfig=wconfig
             if lazy
                 # The constructor registers the object with a global registry.
-                Worker(rpid, ()->connect_to_peer(cluster_manager[], rpid, wconfig))
+                Worker(rpid, ()->connect_to_peer(CTX.cluster_manager[], rpid, wconfig))
             else
-                @async connect_to_peer(cluster_manager[], rpid, wconfig)
+                @async connect_to_peer(CTX.cluster_manager[], rpid, wconfig)
             end
         end
     end
@@ -378,7 +378,7 @@ function connect_to_peer(manager::ClusterManager, rpid::Int, wconfig::WorkerConf
 end
 
 function handle_msg(msg::JoinCompleteMsg, header, r_stream, w_stream, version)
-    w = @lock map_sock_wrkr map_sock_wrkr[][r_stream]
+    w = @lock CTX.map_sock_wrkr CTX.map_sock_wrkr[][r_stream]
     environ = something(w.config.environ, Dict())
     environ[:cpu_threads] = msg.cpu_threads
     w.config.environ = environ
