@@ -761,11 +761,10 @@ function kill(manager::LocalManager, pid::Int, config::WorkerConfig; profile_wai
     remote_do(exit, pid)
 
     timer_task = @async begin
-        sleep(exit_timeout)
+        process = config.process::Process
 
         # Check to see if our child exited, and if not, send an actual kill signal
-        process = config.process::Process
-        if !process_exited(process)
+        if timedwait(() -> process_exited(process), exit_timeout) === :timed_out
             @warn "Failed to gracefully kill worker $(pid)"
             profile_sig = Sys.iswindows() ? nothing : Sys.isbsd() ? ("SIGINFO", 29) : ("SIGUSR1" , 10)
             if profile_sig !== nothing
