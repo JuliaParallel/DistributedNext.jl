@@ -10,7 +10,7 @@ Cluster managers implement how workers can be added, removed and communicated wi
 abstract type ClusterManager end
 
 function throw_if_cluster_manager_unassigned()
-    isassigned(CTX.cluster_manager) || error("cluster_manager is unassigned")
+    isassigned(CTX[].cluster_manager) || error("cluster_manager is unassigned")
     return nothing
 end
 
@@ -144,8 +144,8 @@ mutable struct Worker
     Worker(id::Int) = Worker(id, nothing)
     function Worker(id::Int, conn_func)
         @assert id > 0
-        @lock CTX.map_pid_wrkr if haskey(CTX.map_pid_wrkr[], id)
-            return CTX.map_pid_wrkr[][id]
+        @lock CTX[].map_pid_wrkr if haskey(CTX[].map_pid_wrkr[], id)
+            return CTX[].map_pid_wrkr[][id]
         end
         w=new(id, Threads.ReentrantLock(), [], [], false, WorkerState_created, Threads.Condition(), time(), conn_func)
         w.initialized = Event()
@@ -173,12 +173,12 @@ end
 function check_worker_state(w::Worker)
     if (@atomic w.state) === WorkerState_created
         if !isclusterlazy()
-            if CTX.pgrp.topology === :all_to_all
+            if CTX[].pgrp.topology === :all_to_all
                 # Since higher pids connect with lower pids, the remote worker
                 # may not have connected to us yet. Wait for some time.
                 wait_for_conn(w)
             else
-                error("peer $(w.id) is not connected to $(myid()). Topology : " * string(CTX.pgrp.topology))
+                error("peer $(w.id) is not connected to $(myid()). Topology : " * string(CTX[].pgrp.topology))
             end
         else
             w.ct_time = time()
@@ -270,20 +270,20 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
     stderr_to_stdout && redirect_stderr(stdout)
 
     init_worker(cookie)
-    interface = IPv4(CTX.lproc.bind_addr)
-    if CTX.lproc.bind_port == 0
-        (port, sock) = listenany(interface, CTX.lproc.bind_port_hint)
-        CTX.lproc.bind_port = Int(port)
+    interface = IPv4(CTX[].lproc.bind_addr)
+    if CTX[].lproc.bind_port == 0
+        (port, sock) = listenany(interface, CTX[].lproc.bind_port_hint)
+        CTX[].lproc.bind_port = Int(port)
     else
-        sock = listen(interface, CTX.lproc.bind_port)
+        sock = listen(interface, CTX[].lproc.bind_port)
     end
     errormonitor(@async while isopen(sock)
         client = accept(sock)
         process_messages(client, client, true)
     end)
     print(out, "julia_worker:")  # print header
-    print(out, "$(CTX.lproc.bind_port)#") # print port
-    print(out, CTX.lproc.bind_addr)
+    print(out, "$(CTX[].lproc.bind_port)#") # print port
+    print(out, CTX[].lproc.bind_addr)
     print(out, '\n')
     flush(out)
 
@@ -404,16 +404,16 @@ function init_worker(cookie::AbstractString, manager::ClusterManager=DefaultClus
 
     # On workers, the default cluster manager connects via TCP sockets. Custom
     # transports will need to call this function with their own manager.
-    CTX.cluster_manager[] = manager
+    CTX[].cluster_manager[] = manager
 
     # Since our pid has yet to be set, ensure no RemoteChannel / Future  have been created or addprocs() called.
     @assert nprocs() <= 1
-    @assert isempty(CTX.pgrp.refs)
-    @assert isempty(CTX.client_refs)
+    @assert isempty(CTX[].pgrp.refs)
+    @assert isempty(CTX[].client_refs)
 
     # System is started in head node mode, cleanup related entries
-    empty!(CTX.pgrp.workers)
-    @lock CTX.map_pid_wrkr empty!(CTX.map_pid_wrkr[])
+    empty!(CTX[].pgrp.workers)
+    @lock CTX[].map_pid_wrkr empty!(CTX[].map_pid_wrkr[])
 
     cluster_cookie(cookie)
     nothing
@@ -476,14 +476,14 @@ function addprocs(manager::ClusterManager; kwargs...)
 
     # Call worker-starting callbacks
     warning_interval = params[:callback_warning_interval]
-    _run_callbacks_concurrently("worker-starting", CTX.worker_starting_callbacks,
+    _run_callbacks_concurrently("worker-starting", CTX[].worker_starting_callbacks,
                                 warning_interval, [(manager, params)])
 
     # Add new workers
-    new_workers = @lock CTX.worker_lock addprocs_locked(manager::ClusterManager, params)
+    new_workers = @lock CTX[].worker_lock addprocs_locked(manager::ClusterManager, params)
 
     # Call worker-started callbacks
-    _run_callbacks_concurrently("worker-started", CTX.worker_started_callbacks,
+    _run_callbacks_concurrently("worker-started", CTX[].worker_started_callbacks,
                                 warning_interval, new_workers)
 
     return new_workers
@@ -492,12 +492,12 @@ end
 function addprocs_locked(manager::ClusterManager, params)
     topology(Symbol(params[:topology]))
 
-    if CTX.pgrp.topology !== :all_to_all
+    if CTX[].pgrp.topology !== :all_to_all
         params[:lazy] = false
     end
 
-    if CTX.pgrp.lazy === nothing || nprocs() == 1
-        CTX.pgrp.lazy = params[:lazy]
+    if CTX[].pgrp.lazy === nothing || nprocs() == 1
+        CTX[].pgrp.lazy = params[:lazy]
     elseif isclusterlazy() != params[:lazy]
         throw(ArgumentError(string("Active workers with lazy=", isclusterlazy(),
                                     ". Cannot set lazy=", params[:lazy])))
@@ -629,7 +629,7 @@ end
 
 function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
     # only node 1 can add new nodes, since nobody else has the full list of address:port
-    @assert CTX.lproc.id == 1
+    @assert CTX[].lproc.id == 1
     timeout = worker_timeout()
 
     # initiate a connect. Does not wait for connection completion in case of TCP.
@@ -678,11 +678,11 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
     # - On master, receiving a JoinCompleteMsg triggers rr_ntfy_join (signifies that worker setup is complete)
 
     join_list = []
-    if CTX.pgrp.topology === :all_to_all
+    if CTX[].pgrp.topology === :all_to_all
         # need to wait for lower worker pids to have completed connecting, since the numerical value
         # of pids is relevant to the connection process, i.e., higher pids connect to lower pids and they
         # require the value of config.connect_at which is set only upon connection completion
-        for jw in CTX.pgrp.workers
+        for jw in CTX[].pgrp.workers
             if (jw.id != 1) && (jw.id < w.id)
                 lock(jw.c_state) do
                     # wait for wl to join
@@ -694,12 +694,12 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
             end
         end
 
-    elseif CTX.pgrp.topology === :custom
+    elseif CTX[].pgrp.topology === :custom
         # wait for requested workers to be up before connecting to them.
         filterfunc(x) = (x.id != 1) && isdefined(x, :config) &&
             (notnothing(x.config.ident) in something(wconfig.connect_idents, []))
 
-        wlist = filter(filterfunc, CTX.pgrp.workers)
+        wlist = filter(filterfunc, CTX[].pgrp.workers)
         waittime = 0
         while wconfig.connect_idents !== nothing &&
               length(wlist) < length(wconfig.connect_idents)
@@ -708,7 +708,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
             end
             sleep(1.0)
             waittime += 1
-            wlist = filter(filterfunc, CTX.pgrp.workers)
+            wlist = filter(filterfunc, CTX[].pgrp.workers)
         end
 
         for wl in wlist
@@ -728,7 +728,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
                       join_list)
     send_connection_hdr(w, true)
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
-    join_message = JoinPGRPMsg(w.id, all_locs, CTX.pgrp.topology, enable_threaded_blas, isclusterlazy())
+    join_message = JoinPGRPMsg(w.id, all_locs, CTX[].pgrp.topology, enable_threaded_blas, isclusterlazy())
     send_msg_now(w, MsgHeader(RRID(0,0), ntfy_oid), join_message)
 
     errormonitor(@async manage(w.manager, w.id, w.config, :register))
@@ -737,8 +737,8 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
     if timedwait(() -> isready(rr_ntfy_join), timeout) === :timed_out
         error("worker did not connect within $timeout seconds")
     end
-    lock(CTX.client_refs) do
-        delete!(CTX.pgrp.refs, ntfy_oid)
+    lock(CTX[].client_refs) do
+        delete!(CTX[].pgrp.refs, ntfy_oid)
     end
 
     return w.id
@@ -806,7 +806,7 @@ function check_master_connect()
     errormonitor(
         Threads.@spawn begin
             timeout = worker_timeout()
-            if timedwait(() -> @lock(CTX.map_pid_wrkr, haskey(CTX.map_pid_wrkr[], 1)), timeout) === :timed_out
+            if timedwait(() -> @lock(CTX[].map_pid_wrkr, haskey(CTX[].map_pid_wrkr[], 1)), timeout) === :timed_out
                 print(stderr, "Master process (id 1) could not connect within $(timeout) seconds.\nexiting.\n")
                 exit(1)
             end
@@ -820,7 +820,7 @@ end
 
 Return the cluster cookie.
 """
-cluster_cookie() = (init_multi(); CTX.lproc.cookie)
+cluster_cookie() = (init_multi(); CTX[].lproc.cookie)
 
 """
     cluster_cookie(cookie) -> cookie
@@ -835,12 +835,12 @@ function cluster_cookie(cookie)
 
     cookie = rpad(cookie, HDR_COOKIE_LEN)
 
-    CTX.lproc.cookie = cookie
+    CTX[].lproc.cookie = cookie
     cookie
 end
 
 # Note that atomic_add!() returns the old value, which is what we want
-get_next_pid() = Threads.atomic_add!(CTX.next_pid, 1)
+get_next_pid() = Threads.atomic_add!(CTX[].next_pid, 1)
 
 mutable struct ProcessGroup
     name::String
@@ -854,18 +854,18 @@ end
 
 function topology(t)
     @assert t in [:all_to_all, :master_worker, :custom]
-    if (CTX.pgrp.topology==t) || ((myid()==1) && (nprocs()==1)) || (myid() > 1)
-        CTX.pgrp.topology = t
+    if (CTX[].pgrp.topology==t) || ((myid()==1) && (nprocs()==1)) || (myid() > 1)
+        CTX[].pgrp.topology = t
     else
-        error("Workers with Topology $(CTX.pgrp.topology) already exist. Requested Topology $(t) cannot be set.")
+        error("Workers with Topology $(CTX[].pgrp.topology) already exist. Requested Topology $(t) cannot be set.")
     end
     t
 end
 
-isclusterlazy() = something(CTX.pgrp.lazy, false)
+isclusterlazy() = something(CTX[].pgrp.lazy, false)
 
 get_bind_addr(pid::Integer) = get_bind_addr(worker_from_id(pid))
-get_bind_addr(w::LocalProcess) = CTX.lproc.bind_addr
+get_bind_addr(w::LocalProcess) = CTX[].lproc.bind_addr
 function get_bind_addr(w::Worker)
     if w.config.bind_addr === nothing
         if w.id != myid()
@@ -879,9 +879,9 @@ const HDR_VERSION_LEN = 16
 const HDR_COOKIE_LEN = 16
 
 # whether process is a master or worker in a distributed setup
-myrole() = CTX.role[]
+myrole() = CTX[].role[]
 function myrole!(proctype::Symbol)
-    CTX.role[] = proctype
+    CTX[].role[] = proctype
 end
 
 # Callbacks
@@ -960,14 +960,14 @@ try to either keep the callbacks fast to execute, or do the actual work
 asynchronously by spawning a task in the callback (beware of race conditions if
 you do this).
 """
-add_worker_starting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX.worker_starting_callbacks;
+add_worker_starting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX[].worker_starting_callbacks;
                                                                             arg_types=Tuple{ClusterManager, Dict})
 """
     remove_worker_starting_callback(key)
 
 Remove the callback for `key` that was added with [`add_worker_starting_callback()`](@ref).
 """
-remove_worker_starting_callback(key) = _remove_callback(key, CTX.worker_starting_callbacks)
+remove_worker_starting_callback(key) = _remove_callback(key, CTX[].worker_starting_callbacks)
 
 """
     add_worker_started_callback(f::Base.Callable; key=nothing) -> key
@@ -985,14 +985,14 @@ try to either keep the callbacks fast to execute, or do the actual
 initialization asynchronously by spawning a task in the callback (beware of race
 conditions if you do this).
 """
-add_worker_started_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX.worker_started_callbacks)
+add_worker_started_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX[].worker_started_callbacks)
 
 """
     remove_worker_started_callback(key)
 
 Remove the callback for `key` that was added with [`add_worker_started_callback()`](@ref).
 """
-remove_worker_started_callback(key) = _remove_callback(key, CTX.worker_started_callbacks)
+remove_worker_started_callback(key) = _remove_callback(key, CTX[].worker_started_callbacks)
 
 """
     add_worker_exiting_callback(f::Base.Callable; key=nothing) -> key
@@ -1006,14 +1006,14 @@ All worker-exiting callbacks will be executed concurrently and if they don't
 all finish before the `callback_timeout` passed to `rmprocs()` then the worker
 will be removed anyway.
 """
-add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX.worker_exiting_callbacks)
+add_worker_exiting_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX[].worker_exiting_callbacks)
 
 """
     remove_worker_exiting_callback(key)
 
 Remove the callback for `key` that was added with [`add_worker_exiting_callback()`](@ref).
 """
-remove_worker_exiting_callback(key) = _remove_callback(key, CTX.worker_exiting_callbacks)
+remove_worker_exiting_callback(key) = _remove_callback(key, CTX[].worker_exiting_callbacks)
 
 """
     add_worker_exited_callback(f::Base.Callable; key=nothing) -> key
@@ -1031,7 +1031,7 @@ of `WorkerState_exterminated` means the worker died unexpectedly.
 All worker-exited callbacks will be executed concurrently. If a callback throws
 an exception it will be caught and printed.
 """
-add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX.worker_exited_callbacks;
+add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key, CTX[].worker_exited_callbacks;
                                                                           arg_types=Tuple{Int, WorkerState})
 
 """
@@ -1039,7 +1039,7 @@ add_worker_exited_callback(f::Base.Callable; key=nothing) = _add_callback(f, key
 
 Remove the callback for `key` that was added with [`add_worker_exited_callback()`](@ref).
 """
-remove_worker_exited_callback(key) = _remove_callback(key, CTX.worker_exited_callbacks)
+remove_worker_exited_callback(key) = _remove_callback(key, CTX[].worker_exited_callbacks)
 
 # cluster management related API
 """
@@ -1056,7 +1056,7 @@ julia> remotecall_fetch(() -> myid(), 4)
 4
 ```
 """
-myid() = CTX.lproc.id
+myid() = CTX[].lproc.id
 
 """
     nprocs()
@@ -1075,17 +1075,18 @@ julia> workers()
 ```
 """
 function nprocs()
-    if myid() == 1 || (CTX.pgrp.topology === :all_to_all && !isclusterlazy())
-        n = length(CTX.pgrp.workers)
+    ctx = CTX[]
+    if myid() == 1 || (ctx.pgrp.topology === :all_to_all && !isclusterlazy())
+        n = length(ctx.pgrp.workers)
         # filter out workers in the process of being setup/shutdown.
-        for jw in CTX.pgrp.workers
+        for jw in ctx.pgrp.workers
             if !isa(jw, LocalProcess) && ((@atomic jw.state) !== WorkerState_connected)
                 n = n - 1
             end
         end
         return n
     else
-        return length(CTX.pgrp.workers)
+        return length(ctx.pgrp.workers)
     end
 end
 
@@ -1130,11 +1131,12 @@ julia> procs()
 ```
 """
 function procs()
-    if myid() == 1 || (CTX.pgrp.topology === :all_to_all  && !isclusterlazy())
+    ctx = CTX[]
+    if myid() == 1 || (ctx.pgrp.topology === :all_to_all  && !isclusterlazy())
         # filter out workers in the process of being setup/shutdown.
-        return Int[x.id for x in CTX.pgrp.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
+        return Int[x.id for x in ctx.pgrp.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
     else
-        return Int[x.id for x in CTX.pgrp.workers]
+        return Int[x.id for x in ctx.pgrp.workers]
     end
 end
 
@@ -1147,14 +1149,15 @@ current worker is filtered out.
 other_procs() = filter(!=(myid()), procs())
 
 function id_in_procs(id)  # faster version of `id in procs()`
-    if myid() == 1 || (CTX.pgrp.topology === :all_to_all  && !isclusterlazy())
-        for x in CTX.pgrp.workers
+    ctx = CTX[]
+    if myid() == 1 || (ctx.pgrp.topology === :all_to_all  && !isclusterlazy())
+        for x in ctx.pgrp.workers
             if (x.id::Int) == id && (isa(x, LocalProcess) || (@atomic (x::Worker).state) === WorkerState_connected)
                 return true
             end
         end
     else
-        for x in CTX.pgrp.workers
+        for x in ctx.pgrp.workers
             if (x.id::Int) == id
                 return true
             end
@@ -1172,9 +1175,10 @@ Specifically all workers bound to the same ip-address as `pid` are returned.
 See also [`other_procs()`](@ref).
 """
 function procs(pid::Integer)
+    ctx = CTX[]
     if myid() == 1
-        all_workers = [x for x in CTX.pgrp.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
-        if (pid == 1) || (isa(@lock(CTX.map_pid_wrkr, CTX.map_pid_wrkr[][pid].manager), LocalManager))
+        all_workers = [x for x in ctx.pgrp.workers if isa(x, LocalProcess) || ((@atomic x.state) === WorkerState_connected)]
+        if (pid == 1) || (isa(@lock(ctx.map_pid_wrkr, ctx.map_pid_wrkr[][pid].manager), LocalManager))
             Int[x.id for x in filter(w -> (w.id==1) || (isa(w.manager, LocalManager)), all_workers)]
         else
             ipatpid = get_bind_addr(pid)
@@ -1270,8 +1274,8 @@ function setstatus!(x, mod::Module, pid::Int=myid())
     end
 
     if myid() == 1
-        @lock CTX.map_pid_statuses begin
-            statuses = get!(CTX.map_pid_statuses[], pid, Dict{Module, Any}())
+        @lock CTX[].map_pid_statuses begin
+            statuses = get!(CTX[].map_pid_statuses[], pid, Dict{Module, Any}())
             statuses[mod] = x
         end
     else
@@ -1280,8 +1284,8 @@ function setstatus!(x, mod::Module, pid::Int=myid())
 end
 
 function _getstatus(pid, mod)
-    @lock CTX.map_pid_statuses begin
-        statuses = get(CTX.map_pid_statuses[], pid, nothing)
+    @lock CTX[].map_pid_statuses begin
+        statuses = get(CTX[].map_pid_statuses[], pid, nothing)
         isnothing(statuses) ? nothing : get(statuses, mod, nothing)
     end
 end
@@ -1315,7 +1319,7 @@ function getstatus(mod::Module, pid::Int=myid())
     # During the worker-exited callbacks this function may be called, at which
     # point it will not exist in procs(). Thus we check whether the function is
     # being called for an exited worker and allow it if so.
-    if !id_in_procs(pid) && CTX.exited_callback_pid[] != pid
+    if !id_in_procs(pid) && CTX[].exited_callback_pid[] != pid
         throw(ArgumentError("Worker $(pid) does not exist, cannot get its status"))
     end
 
@@ -1383,12 +1387,12 @@ function rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
 end
 
 function _rmprocs(pids, waitfor, callback_timeout)
-    lock(CTX.worker_lock)
+    lock(CTX[].worker_lock)
     try
         # Run the callbacks
         callback_tasks = Tuple{Any, Task}[]
         for pid in pids
-            for (name, callback) in CTX.worker_exiting_callbacks
+            for (name, callback) in CTX[].worker_exiting_callbacks
                 push!(callback_tasks, (name, Threads.@spawn callback(pid)))
             end
         end
@@ -1404,7 +1408,7 @@ function _rmprocs(pids, waitfor, callback_timeout)
             if p == 1
                 @warn "rmprocs: process 1 not removed"
             else
-                w = @lock CTX.map_pid_wrkr get(CTX.map_pid_wrkr[], p, nothing)
+                w = @lock CTX[].map_pid_wrkr get(CTX[].map_pid_wrkr[], p, nothing)
                 if !isnothing(w)
                     set_worker_state(w, WorkerState_terminating)
                     kill(w.manager, p, w.config)
@@ -1425,7 +1429,7 @@ function _rmprocs(pids, waitfor, callback_timeout)
             throw(ErrorException(estr))
         end
     finally
-        unlock(CTX.worker_lock)
+        unlock(CTX[].worker_lock)
     end
 end
 
@@ -1443,19 +1447,19 @@ end
 # No-arg constructor added for compatibility with Julia 1.0 & 1.1, should be deprecated in the future
 ProcessExitedException() = ProcessExitedException(-1)
 
-worker_from_id(i) = worker_from_id(CTX.pgrp, i)
+worker_from_id(i) = worker_from_id(CTX[].pgrp, i)
 function worker_from_id(pg::ProcessGroup, i)
-    @lock CTX.map_del_wrkr if !isempty(CTX.map_del_wrkr[]) && in(i, CTX.map_del_wrkr[])
+    @lock CTX[].map_del_wrkr if !isempty(CTX[].map_del_wrkr[]) && in(i, CTX[].map_del_wrkr[])
         throw(ProcessExitedException(i))
     end
 
-    w = @lock CTX.map_pid_wrkr get(CTX.map_pid_wrkr[], i, nothing)
+    w = @lock CTX[].map_pid_wrkr get(CTX[].map_pid_wrkr[], i, nothing)
     if w === nothing
         if myid() == 1
             error("no process with id $i exists")
         end
         w = Worker(i)
-        @lock CTX.map_pid_wrkr CTX.map_pid_wrkr[][i] = w
+        @lock CTX[].map_pid_wrkr CTX[].map_pid_wrkr[][i] = w
     else
         w = w::Union{Worker, LocalProcess}
     end
@@ -1471,7 +1475,7 @@ This is useful when writing custom [`serialize`](@ref) methods for a type,
 which optimizes the data written out depending on the receiving process id.
 """
 function worker_id_from_socket(s)
-    w = @lock CTX.map_sock_wrkr get(CTX.map_sock_wrkr[], s, nothing)
+    w = @lock CTX[].map_sock_wrkr get(CTX[].map_sock_wrkr[], s, nothing)
     if isa(w,Worker)
         if s === w.r_stream || s === w.w_stream
             return w.id
@@ -1485,30 +1489,30 @@ function worker_id_from_socket(s)
 end
 
 
-register_worker(w) = register_worker(CTX.pgrp, w)
+register_worker(w) = register_worker(CTX[].pgrp, w)
 function register_worker(pg, w)
     push!(pg.workers, w)
-    @lock CTX.map_pid_wrkr CTX.map_pid_wrkr[][w.id] = w
+    @lock CTX[].map_pid_wrkr CTX[].map_pid_wrkr[][w.id] = w
 end
 
 function register_worker_streams(w)
-    @lock CTX.map_sock_wrkr begin
-        CTX.map_sock_wrkr[][w.r_stream] = w
-        CTX.map_sock_wrkr[][w.w_stream] = w
+    @lock CTX[].map_sock_wrkr begin
+        CTX[].map_sock_wrkr[][w.r_stream] = w
+        CTX[].map_sock_wrkr[][w.w_stream] = w
     end
 end
 
-deregister_worker(pid) = deregister_worker(CTX.pgrp, pid)
+deregister_worker(pid) = deregister_worker(CTX[].pgrp, pid)
 function deregister_worker(pg, pid)
     pg.workers = filter(x -> !(x.id == pid), pg.workers)
 
-    w = @lock CTX.map_pid_wrkr pop!(CTX.map_pid_wrkr[], pid, nothing)
+    w = @lock CTX[].map_pid_wrkr pop!(CTX[].map_pid_wrkr[], pid, nothing)
     if isa(w, Worker)
         if isdefined(w, :r_stream)
-            @lock CTX.map_sock_wrkr begin
-                pop!(CTX.map_sock_wrkr[], w.r_stream, nothing)
+            @lock CTX[].map_sock_wrkr begin
+                pop!(CTX[].map_sock_wrkr[], w.r_stream, nothing)
                 if w.r_stream != w.w_stream
-                    pop!(CTX.map_sock_wrkr[], w.w_stream, nothing)
+                    pop!(CTX[].map_sock_wrkr[], w.w_stream, nothing)
                 end
             end
         end
@@ -1516,7 +1520,7 @@ function deregister_worker(pg, pid)
         if myid() == 1 && (myrole() === :master) && isdefined(w, :config)
             # Notify the cluster manager of this workers death
             manage(w.manager, w.id, w.config, :deregister)
-            if CTX.pgrp.topology !== :all_to_all || isclusterlazy()
+            if CTX[].pgrp.topology !== :all_to_all || isclusterlazy()
                 for rpid in other_workers()
                     try
                         remote_do(deregister_worker, rpid, pid)
@@ -1526,12 +1530,12 @@ function deregister_worker(pg, pid)
             end
         end
     end
-    @lock CTX.map_del_wrkr push!(CTX.map_del_wrkr[], pid)
+    @lock CTX[].map_del_wrkr push!(CTX[].map_del_wrkr[], pid)
 
     # delete this worker from our remote reference client sets
     ids = []
     tonotify = []
-    lock(CTX.client_refs) do
+    lock(CTX[].client_refs) do
         for (id, rv) in pg.refs
             if in(pid, rv.clientset)
                 push!(ids, id)
@@ -1560,13 +1564,13 @@ function deregister_worker(pg, pid)
         # pid check. We go to some effort to make sure this works after
         # deregistering the worker because if it's called beforehand the worker
         # will incorrectly be shown in e.g. procs().
-        @with CTX.exited_callback_pid => pid begin
-            _run_callbacks_concurrently("worker-exited", CTX.worker_exited_callbacks,
+        @with CTX[].exited_callback_pid => pid begin
+            _run_callbacks_concurrently("worker-exited", CTX[].worker_exited_callbacks,
                                         warning_interval, [(pid, w.state)]; catch_exceptions=true)
         end
 
         # Delete its statuses
-        @lock CTX.map_pid_statuses delete!(CTX.map_pid_statuses[], pid)
+        @lock CTX[].map_pid_statuses delete!(CTX[].map_pid_statuses[], pid)
     end
 
     return
@@ -1575,7 +1579,7 @@ end
 
 function interrupt(pid::Integer)
     @assert myid() == 1
-    w = @lock CTX.map_pid_wrkr CTX.map_pid_wrkr[][pid]
+    w = @lock CTX[].map_pid_wrkr CTX[].map_pid_wrkr[][pid]
     if isa(w, Worker)
         manage(w.manager, w.id, w.config, :interrupt)
     end
@@ -1615,11 +1619,11 @@ function check_same_host(pids)
         # We checkfirst if all test pids have been started using the local manager,
         # else we check for the same bind_to addr. This handles the special case
         # where the local ip address may change - as during a system sleep/awake
-        @lock CTX.map_pid_wrkr if all(p -> (p==1) || (isa(CTX.map_pid_wrkr[][p].manager, LocalManager)), pids)
+        @lock CTX[].map_pid_wrkr if all(p -> (p==1) || (isa(CTX[].map_pid_wrkr[][p].manager, LocalManager)), pids)
             return true
         else
-            first_bind_addr = notnothing(wp_bind_addr(CTX.map_pid_wrkr[][pids[1]]))
-            return all(p -> notnothing(wp_bind_addr(CTX.map_pid_wrkr[][p])) == first_bind_addr, pids[2:end])
+            first_bind_addr = notnothing(wp_bind_addr(CTX[].map_pid_wrkr[][pids[1]]))
+            return all(p -> notnothing(wp_bind_addr(CTX[].map_pid_wrkr[][p])) == first_bind_addr, pids[2:end])
         end
     end
 end
@@ -1687,16 +1691,16 @@ function init_bind_addr()
         end
     end
 
-    CTX.lproc.bind_addr = bind_addr
-    CTX.lproc.bind_port = bind_port
-    CTX.lproc.bind_port_hint = bind_port_hint
+    CTX[].lproc.bind_addr = bind_addr
+    CTX[].lproc.bind_port = bind_port
+    CTX[].lproc.bind_port_hint = bind_port_hint
 end
 
 using Random: randstring
 
 # do initialization that's only needed when there is more than 1 processor
 function init_multi()
-    if !Threads.atomic_cas!(CTX.inited, false, true)
+    if !Threads.atomic_cas!(CTX[].inited, false, true)
         push!(Base.package_callbacks, _require_callback)
         atexit(terminate_all_workers)
         init_bind_addr()
@@ -1706,12 +1710,12 @@ function init_multi()
 end
 
 function init_parallel()
-    start_gc_msgs_task()
+    CTX[].gc_msgs_task = start_gc_msgs_task()
 
     # start in "head node" mode, if worker, will override later.
-    CTX.lproc.id = 1
-    @assert isempty(CTX.pgrp.workers)
-    register_worker(CTX.lproc)
+    CTX[].lproc.id = 1
+    @assert isempty(CTX[].pgrp.workers)
+    register_worker(CTX[].lproc)
 end
 
 write_cookie(io::IO) = print(io.in, string(cluster_cookie(), "\n"))

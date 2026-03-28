@@ -88,7 +88,7 @@ function _check_distributed_active()
         return false
     end
 
-    if isdefined(Base.loaded_modules[distributed_pkgid].LPROC, :cookie) && CTX.inited[]
+    if isdefined(Base.loaded_modules[distributed_pkgid].LPROC, :cookie) && CTX[].inited[]
         @warn "DistributedNext has detected that the Distributed stdlib may be in use. Be aware that these libraries are not compatible, you should use either one or the other."
         return true
     else
@@ -123,7 +123,7 @@ Base.lock(l::Lockable) = lock(l.lock)
 Base.trylock(l::Lockable) = trylock(l.lock)
 Base.unlock(l::Lockable) = unlock(l.lock)
 
-next_ref_id() = Threads.atomic_add!(CTX.ref_id, 1)
+next_ref_id() = Threads.atomic_add!(CTX[].ref_id, 1)
 
 struct RRID
     whence::Int
@@ -149,9 +149,9 @@ include("managers.jl")    # LocalManager and SSHManager
 include("precompile.jl")
 
 # Bundles all mutable global state for a distributed cluster into a single
-# object. Currently a single global instance (`CTX`) is used, but multiple
-# independent clusters could be supported in the future.
-@kwdef struct ClusterContext
+# object. The active context is accessed via the `CTX` ScopedValue, allowing
+# multiple independent clusters to coexist in different task scopes.
+@kwdef mutable struct ClusterContext
     # Process identity
     lproc::LocalProcess = LocalProcess()
     role::Ref{Symbol} = Ref{Symbol}(:master)
@@ -204,11 +204,27 @@ include("precompile.jl")
     # Scoped value for exited callback pid
     exited_callback_pid::ScopedValue{Int} = ScopedValue(-1)
 
+    # GC messages task
+    shutting_down::Threads.Atomic{Bool} = Threads.Atomic{Bool}(false)
+    gc_msgs_task::Union{Task, Nothing} = nothing
+
     # Stdlib watcher
-    stdlib_watcher_timer::Ref{Union{Timer, Nothing}} = Ref{Union{Timer, Nothing}}(nothing)
+    stdlib_watcher_timer::Union{Timer, Nothing} = nothing
 end
 
-const CTX = ClusterContext()
+function Base.close(ctx::ClusterContext)
+    ctx.shutting_down[] = true
+    if !isnothing(ctx.gc_msgs_task)
+        @lock ctx.any_gc_flag notify(ctx.any_gc_flag)
+        wait(ctx.gc_msgs_task::Task)
+    end
+
+    if !isnothing(ctx.stdlib_watcher_timer)
+        close(ctx.stdlib_watcher_timer::Timer)
+    end
+end
+
+const CTX = ScopedValue(ClusterContext())
 
 function __init__()
     init_parallel()
@@ -219,13 +235,14 @@ function __init__()
         # cluster cookie has been set, which is most likely to have been done
         # through Distributed.init_multi() being called by Distributed.addprocs() or
         # something.
-        CTX.stdlib_watcher_timer[] = Timer(0; interval=1) do timer
+        CTX[].stdlib_watcher_timer = Timer(0; interval=1) do timer
             if _check_distributed_active()
                 close(timer)
             end
         end
-        atexit(() -> close(CTX.stdlib_watcher_timer[]))
     end
+
+    atexit(() -> close(CTX[]))
 end
 
 end

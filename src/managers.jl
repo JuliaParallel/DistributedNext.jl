@@ -415,7 +415,7 @@ function manage(manager::SSHManager, id::Integer, config::WorkerConfig, op::Symb
 end
 
 # This is defined such that the port numbers start at 9201 and wrap around at 32,000
-next_tunnel_port() = (Threads.atomic_add!(CTX.tunnel_counter, 1) % 22_800) + 9200
+next_tunnel_port() = (Threads.atomic_add!(CTX[].tunnel_counter, 1) % 22_800) + 9200
 
 
 """
@@ -495,7 +495,7 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
     dir = params[:dir]
     exename = params[:exename]
     exeflags = params[:exeflags]
-    bind_to = manager.restrict ? `127.0.0.1` : `$(CTX.lproc.bind_addr)`
+    bind_to = manager.restrict ? `127.0.0.1` : `$(CTX[].lproc.bind_addr)`
     env = Dict{String,String}(params[:env])
 
     # TODO: Maybe this belongs in base/initdefs.jl as a package_environment() function
@@ -622,10 +622,10 @@ function connect(manager::ClusterManager, pid::Int, config::WorkerConfig)
     end
 
     if tunnel
-        if !haskey(CTX.tunnel_hosts_map, pubhost)
-            CTX.tunnel_hosts_map[pubhost] = Semaphore(something(config.max_parallel, typemax(Int)))
+        if !haskey(CTX[].tunnel_hosts_map, pubhost)
+            CTX[].tunnel_hosts_map[pubhost] = Semaphore(something(config.max_parallel, typemax(Int)))
         end
-        sem = CTX.tunnel_hosts_map[pubhost]
+        sem = CTX[].tunnel_hosts_map[pubhost]
 
         sshflags = notnothing(config.sshflags)
         multiplex = something(config.multiplex, false)
@@ -690,9 +690,9 @@ end
 
 function bind_client_port(sock::TCPSocket, iptype)
     bind_host = iptype(0)
-    if Sockets.bind(sock, bind_host, CTX.client_port[])
+    if Sockets.bind(sock, bind_host, CTX[].client_port[])
         _addr, port = getsockname(sock)
-        CTX.client_port[] = port
+        CTX[].client_port[] = port
     end
     return sock
 end

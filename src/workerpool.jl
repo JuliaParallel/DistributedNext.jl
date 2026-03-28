@@ -341,14 +341,14 @@ WorkerPool(Channel{Int64}(sz_max:9223372036854775807,sz_curr:3), Set([4, 2, 3]),
 function default_worker_pool()::AbstractWorkerPool
     # On workers retrieve the default worker pool from the master when accessed
     # for the first time
-    if CTX.default_worker_pool[] === nothing
+    if CTX[].default_worker_pool[] === nothing
         if myid() == 1
-            CTX.default_worker_pool[] = WorkerPool()
+            CTX[].default_worker_pool[] = WorkerPool()
         else
-            CTX.default_worker_pool[] = remotecall_fetch(()->default_worker_pool(), 1)
+            CTX[].default_worker_pool[] = remotecall_fetch(()->default_worker_pool(), 1)
         end
     end
-    return CTX.default_worker_pool[]::AbstractWorkerPool
+    return CTX[].default_worker_pool[]::AbstractWorkerPool
 end
 
 """
@@ -357,7 +357,7 @@ end
 Set a [`AbstractWorkerPool`](@ref) to be used by `remote(f)` and [`pmap`](@ref) (by default).
 """
 function default_worker_pool!(pool::AbstractWorkerPool)
-    CTX.default_worker_pool[] = pool
+    CTX[].default_worker_pool[] = pool
 end
 
 """

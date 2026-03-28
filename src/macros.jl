@@ -1,7 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 function nextproc()
-    idx = Threads.atomic_add!(CTX.next_worker_idx, 1)
+    idx = Threads.atomic_add!(CTX[].next_worker_idx, 1)
     return workers()[(idx % nworkers()) + 1]
 end
 
