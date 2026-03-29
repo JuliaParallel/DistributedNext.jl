@@ -14,6 +14,7 @@ This documents notable changes in DistributedNext.jl. The format is based on
   single struct ([#61]). This should not be a user-visible change, but of course
   it's possible that some things slipped through the cracks so please open an
   issue if you encounter any bugs.
+- A precompilation workload was added to improve TTFX ([#62]).
 
 ## [v1.2.0] - 2026-03-21
 

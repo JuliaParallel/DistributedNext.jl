@@ -170,21 +170,21 @@ function test_futures_dgc(id)
     fid = remoteref_id(f)
 
     # remote value should be deleted after a fetch
-    @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, fid) == true
+    @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, fid) == true
     @test f.v === nothing
     @test fetch(f) == id
     @test f.v !== nothing
     yield(); # flush gc msgs
-    @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, fid))
+    @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, fid))
 
     # if unfetched, it should be deleted after a finalize
     f = remotecall(myid, id)
     fid = remoteref_id(f)
-    @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, fid) == true
+    @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, fid) == true
     @test f.v === nothing
     finalize(f)
     yield(); # flush gc msgs
-    @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, fid))
+    @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, fid))
 end
 
 @testset "GC tests for Futures" begin
@@ -204,23 +204,23 @@ end
     put!(fstore, f)
 
     @test fetch(f) == wid1
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == true
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == true
     remotecall_fetch(r->(fetch(fetch(r)); yield()), wid2, fstore)
     sleep(0.5) # to ensure that wid2 gc messages have been executed on wid1
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == false
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == false
 
     # put! should release remote reference since it would have been cached locally
     f = Future(wid1)
     fid = remoteref_id(f)
 
     # should not be created remotely till accessed
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == false
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == false
     # create it remotely
     isready(f)
 
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == true
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == true
     put!(f, :OK)
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == false
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == false
     @test fetch(f) === :OK
 
     # RemoteException should be thrown on a put! when another process has set the value
@@ -231,7 +231,7 @@ end
     put!(fstore, f) # send f to wid2
     put!(f, :OK) # set value from master
 
-    @test remotecall_fetch(k->haskey(DistributedNext.CTX.pgrp.refs, k), wid1, fid) == true
+    @test remotecall_fetch(k->haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, fid) == true
 
     testval = remotecall_fetch(wid2, fstore) do x
         try
@@ -256,14 +256,14 @@ end
     f = remotecall_wait(identity, id_other, ones(10))
     rrid = DistributedNext.RRID(f.whence, f.id)
     remotecall_fetch(f25847, id_other, f)
-    @test BitSet([id_me]) == remotecall_fetch(()->DistributedNext.CTX.pgrp.refs[rrid].clientset, id_other)
+    @test BitSet([id_me]) == remotecall_fetch(()->DistributedNext.CTX[].pgrp.refs[rrid].clientset, id_other)
 
     remotecall_fetch(f25847, id_other, f)
-    @test BitSet([id_me]) == remotecall_fetch(()->DistributedNext.CTX.pgrp.refs[rrid].clientset, id_other)
+    @test BitSet([id_me]) == remotecall_fetch(()->DistributedNext.CTX[].pgrp.refs[rrid].clientset, id_other)
 
     finalize(f)
     yield() # flush gc msgs
-    @test poll_while(() -> remotecall_fetch(chk_rrid->(yield(); haskey(DistributedNext.CTX.pgrp.refs, chk_rrid)), id_other, rrid))
+    @test poll_while(() -> remotecall_fetch(chk_rrid->(yield(); haskey(DistributedNext.CTX[].pgrp.refs, chk_rrid)), id_other, rrid))
 end
 
 @testset "GC tests for RemoteChannels" begin
@@ -273,12 +273,12 @@ end
         rrid = remoteref_id(rr)
 
         # remote value should be deleted after finalizing the ref
-        @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, rrid) == true
+        @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, rrid) == true
         @test fetch(rr) === :OK
-        @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, rrid) == true
+        @test remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, rrid) == true
         finalize(rr)
         yield(); # flush gc msgs
-        @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX.pgrp.refs, k)), id, rrid))
+        @test poll_while(() -> remotecall_fetch(k->(yield();haskey(DistributedNext.CTX[].pgrp.refs, k)), id, rrid))
     end
     test_remoteref_dgc(id_me)
     test_remoteref_dgc(id_other)
@@ -291,13 +291,13 @@ end
         fstore = RemoteChannel(wid2)
 
         put!(fstore, rr)
-        @test timedwait(() -> remotecall_fetch(k -> haskey(DistributedNext.CTX.pgrp.refs, k), wid1, rrid), 10) == :ok
+        @test timedwait(() -> remotecall_fetch(k -> haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, rrid), 10) == :ok
         finalize(rr) # finalize locally
         yield() # flush gc msgs
-        @test remotecall_fetch(k -> haskey(DistributedNext.CTX.pgrp.refs, k), wid1, rrid) == true
+        @test remotecall_fetch(k -> haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, rrid) == true
         remotecall_fetch(r -> (finalize(take!(r)); yield(); nothing), wid2, fstore) # finalize remotely
         sleep(0.5) # to ensure that wid2 messages have been executed on wid1
-        @test poll_while(() -> remotecall_fetch(k -> haskey(DistributedNext.CTX.pgrp.refs, k), wid1, rrid))
+        @test poll_while(() -> remotecall_fetch(k -> haskey(DistributedNext.CTX[].pgrp.refs, k), wid1, rrid))
     end
 end
 
@@ -813,7 +813,7 @@ if DoFullTest
     all_w = workers()
     # Test sending fake data to workers. The worker processes will print an
     # error message but should not terminate.
-    for w in DistributedNext.CTX.pgrp.workers
+    for w in DistributedNext.CTX[].pgrp.workers
         if isa(w, DistributedNext.Worker)
             local s = connect(w.config.host, w.config.port)
             write(s, randstring(32))
@@ -1120,7 +1120,7 @@ end
     end
 
     function test_blas_config(pid, expected)
-        for worker in DistributedNext.CTX.pgrp.workers
+        for worker in DistributedNext.CTX[].pgrp.workers
             if worker.id == pid
                 @test worker.config.enable_threaded_blas == expected
                 return
@@ -1628,7 +1628,7 @@ function launch(manager::WorkerArgTester, params::Dict, launched::Array, c::Cond
     exename = params[:exename]
     exeflags = params[:exeflags]
 
-    cmd = `$exename $exeflags --bind-to $(DistributedNext.CTX.lproc.bind_addr) $(manager.worker_opt)`
+    cmd = `$exename $exeflags --bind-to $(DistributedNext.CTX[].lproc.bind_addr) $(manager.worker_opt)`
     cmd = pipeline(detach(setenv(cmd, dir=dir)))
     io = open(cmd, "r+")
     manager.write_cookie && DistributedNext.write_cookie(io)
@@ -1671,7 +1671,7 @@ nprocs()>1 && rmprocs(workers())
         exeflags = params[:exeflags]
 
         jlcmd = "using DistributedNext; start_worker(\"\"; close_stdin=$(manager.close_stdin), stderr_to_stdout=$(manager.stderr_to_stdout));"
-        cmd = detach(setenv(`$exename $exeflags --bind-to $(DistributedNext.CTX.lproc.bind_addr) -e $jlcmd`, dir=dir))
+        cmd = detach(setenv(`$exename $exeflags --bind-to $(DistributedNext.CTX[].lproc.bind_addr) -e $jlcmd`, dir=dir))
         proc = open(cmd, "r+")
 
         wconfig = WorkerConfig()
@@ -1716,7 +1716,7 @@ end
             remotecall_fetch(p) do
                 ports_lower = []        # ports of pids lower than myid()
                 ports_higher = []       # ports of pids higher than myid()
-                for w in DistributedNext.CTX.pgrp.workers
+                for w in DistributedNext.CTX[].pgrp.workers
                     w.id == myid() && continue
                     port = Sockets._sockname(w.r_stream, true)[2]
                     if (w.id == 1)
@@ -2015,7 +2015,7 @@ end
     # status to have been deleted. Only works if the worker has a status of
     # course.
     function wait_for_deregistration(pid)
-        statuses = DistributedNext.CTX.map_pid_statuses
+        statuses = DistributedNext.CTX[].map_pid_statuses
         @test timedwait(() -> @lock(statuses, !haskey(statuses[], pid)), 10) == :ok
     end
 
