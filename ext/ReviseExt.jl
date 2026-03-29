@@ -3,8 +3,11 @@ module ReviseExt
 import DistributedNext
 import DistributedNext: myid, workers, remotecall
 
-import Revise
+using PrecompileTools: @recompile_invalidations
 
+# Sadly Revise causes quite a few invalidations. TODO: make DistributedNext more
+# resistant to invalidations.
+@recompile_invalidations import Revise
 
 struct DistributedNextWorker <: Revise.AbstractWorker
     id::Int

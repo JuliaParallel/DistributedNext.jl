@@ -539,7 +539,7 @@ function addprocs_locked(manager::ClusterManager, params)
             if isempty(launched)
                 istaskdone(t_launch) && break
                 @async begin
-                    sleep(1)
+                    sleep(0.1)
                     notify(launch_ntfy)
                 end
                 wait(launch_ntfy)

@@ -146,7 +146,6 @@ include("macros.jl")      # @spawn and friends
 include("workerpool.jl")
 include("pmap.jl")
 include("managers.jl")    # LocalManager and SSHManager
-include("precompile.jl")
 
 # Bundles all mutable global state for a distributed cluster into a single
 # object. The active context is accessed via the `CTX` ScopedValue, allowing
@@ -212,6 +211,14 @@ include("precompile.jl")
     stdlib_watcher_timer::Union{Timer, Nothing} = nothing
 end
 
+function ClusterContext(f::Base.Callable; kwargs...)
+    ctx = ClusterContext(; kwargs...)
+    ret = @with CTX => ctx f()
+    close(ctx)
+
+    return ret
+end
+
 function Base.close(ctx::ClusterContext)
     ctx.shutting_down[] = true
     if !isnothing(ctx.gc_msgs_task)
@@ -230,6 +237,8 @@ function Base.close(ctx::ClusterContext)
 end
 
 const CTX = ScopedValue(ClusterContext())
+
+include("precompile.jl")
 
 function __init__()
     init_parallel()
