@@ -231,6 +231,7 @@ mutable struct LocalProcess
     bind_port_hint::Int
     bind_port::Int
     cookie::String
+    in_process::Bool  # true when running as a task, not a separate OS process
     LocalProcess() = new(1)
 end
 
@@ -260,7 +261,7 @@ should not be relied upon to always pick the fastest interface.
 It does not return.
 """
 start_worker(cookie::AbstractString=readline(stdin); kwargs...) = start_worker(stdout, cookie; kwargs...)
-function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true, exit_on_close::Bool=true)
     init_multi()
 
     if close_stdin # workers will not use it
@@ -278,8 +279,15 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
         sock = listen(interface, CTX[].lproc.bind_port)
     end
     errormonitor(@async while isopen(sock)
-        client = accept(sock)
-        process_messages(client, client, true)
+        try
+            client = accept(sock)
+            process_messages(client, client, true)
+        catch ex
+            # An IOError is thrown when the socket is closed
+            if !(ex isa Base.IOError)
+                rethrow()
+            end
+        end
     end)
     print(out, "julia_worker:")  # print header
     print(out, "$(CTX[].lproc.bind_port)#") # print port
@@ -298,13 +306,17 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
         # To prevent hanging processes on remote machines, newly launched workers exit if the
         # master process does not connect in time.
         check_master_connect()
-        while true; wait(); end
+        while isopen(out)
+            sleep(0.1)
+        end
     catch err
         print(stderr, "unhandled exception on $(myid()): $(err)\nexiting.\n")
     end
 
     close(sock)
-    exit(0)
+    if exit_on_close
+        exit(0)
+    end
 end
 
 

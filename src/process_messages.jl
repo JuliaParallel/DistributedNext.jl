@@ -228,7 +228,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
             set_worker_state(werr, oldstate != WorkerState_terminating ? WorkerState_exterminated : WorkerState_terminated)
 
             # If unhandleable error occurred talking to pid 1, exit
-            if wpid == 1
+            if wpid == 1 && !ctx.lproc.in_process
                 if isopen(w_stream)
                     @error "Fatal error on process $(myid())" exception=e,catch_backtrace()
                 end

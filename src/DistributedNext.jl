@@ -222,6 +222,11 @@ function Base.close(ctx::ClusterContext)
     if !isnothing(ctx.stdlib_watcher_timer)
         close(ctx.stdlib_watcher_timer::Timer)
     end
+
+    # Close all tracked sockets
+    @lock ctx.map_sock_wrkr for sock in keys(ctx.map_sock_wrkr[])
+        close(sock)
+    end
 end
 
 const CTX = ScopedValue(ClusterContext())
