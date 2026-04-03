@@ -81,9 +81,10 @@ function run_work_thunk_remotevalue(rv::RemoteValue, thunk)
 end
 
 function schedule_call(rid, thunk)
-    return lock(CTX.client_refs) do
+    ctx = CTX[]
+    @lock ctx.client_refs begin
         rv = RemoteValue(def_rv_channel())
-        (CTX.pgrp::ProcessGroup).refs[rid] = rv
+        (ctx.pgrp::ProcessGroup).refs[rid] = rv
         push!(rv.clientset, rid.whence)
         errormonitor(@async run_work_thunk_remotevalue(rv, thunk))
         return rv
@@ -210,6 +211,7 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
             handle_msg(msg, header, r_stream, w_stream, version)
         end
     catch e
+        ctx = CTX[]
         oldstate = WorkerState_unknown
 
         # Check again as it may have been set in a message handler but not propagated to the calling block above
@@ -220,13 +222,13 @@ function message_handler_loop(r_stream::IO, w_stream::IO, incoming::Bool)
         if wpid < 1
             println(stderr, e, CapturedException(e, catch_backtrace()))
             println(stderr, "Process($(myid())) - Unknown remote, closing connection.")
-        elseif @lock(CTX.map_del_wrkr, !(wpid in CTX.map_del_wrkr[]))
+        elseif @lock(ctx.map_del_wrkr, !(wpid in ctx.map_del_wrkr[]))
             werr = worker_from_id(wpid)
             oldstate = @atomic werr.state
             set_worker_state(werr, oldstate != WorkerState_terminating ? WorkerState_exterminated : WorkerState_terminated)
 
             # If unhandleable error occurred talking to pid 1, exit
-            if wpid == 1
+            if wpid == 1 && !ctx.lproc.in_process
                 if isopen(w_stream)
                     @error "Fatal error on process $(myid())" exception=e,catch_backtrace()
                 end
@@ -318,24 +320,26 @@ function handle_msg(msg::IdentifySocketMsg, header, r_stream, w_stream, version)
     throw_if_cluster_manager_unassigned()
 
     # register a new peer worker connection
-    w = Worker(msg.from_pid, r_stream, w_stream, CTX.cluster_manager[]; version=version)::Worker
+    w = Worker(msg.from_pid, r_stream, w_stream, CTX[].cluster_manager[]; version=version)::Worker
     send_connection_hdr(w, false)
     send_msg_now(w, MsgHeader(), IdentifySocketAckMsg())
     notify(w.initialized)
 end
 
 function handle_msg(msg::IdentifySocketAckMsg, header, r_stream, w_stream, version)
-    w = @lock CTX.map_sock_wrkr CTX.map_sock_wrkr[][r_stream]
+    ctx = CTX[]
+    w = @lock ctx.map_sock_wrkr ctx.map_sock_wrkr[][r_stream]
     w.version = version
 end
 
 function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
     throw_if_cluster_manager_unassigned()
 
-    CTX.lproc.id = msg.self_pid
-    controller = Worker(1, r_stream, w_stream, CTX.cluster_manager[]; version=version)::Worker
+    ctx = CTX[]
+    ctx.lproc.id = msg.self_pid
+    controller = Worker(1, r_stream, w_stream, ctx.cluster_manager[]; version=version)::Worker
     notify(controller.initialized)
-    register_worker(CTX.lproc)
+    register_worker(ctx.lproc)
     topology(msg.topology)
 
     if !msg.enable_threaded_blas
@@ -343,7 +347,7 @@ function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
     end
 
     lazy = msg.lazy
-    CTX.pgrp.lazy = lazy
+    ctx.pgrp.lazy = lazy
 
     @sync for (connect_at, rpid) in msg.other_workers
         wconfig = WorkerConfig()
@@ -352,9 +356,9 @@ function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
         let rpid=rpid, wconfig=wconfig
             if lazy
                 # The constructor registers the object with a global registry.
-                Worker(rpid, ()->connect_to_peer(CTX.cluster_manager[], rpid, wconfig))
+                Worker(rpid, ()->connect_to_peer(ctx.cluster_manager[], rpid, wconfig))
             else
-                @async connect_to_peer(CTX.cluster_manager[], rpid, wconfig)
+                @async connect_to_peer(ctx.cluster_manager[], rpid, wconfig)
             end
         end
     end
@@ -378,7 +382,8 @@ function connect_to_peer(manager::ClusterManager, rpid::Int, wconfig::WorkerConf
 end
 
 function handle_msg(msg::JoinCompleteMsg, header, r_stream, w_stream, version)
-    w = @lock CTX.map_sock_wrkr CTX.map_sock_wrkr[][r_stream]
+    ctx = CTX[]
+    w = @lock ctx.map_sock_wrkr ctx.map_sock_wrkr[][r_stream]
     environ = something(w.config.environ, Dict())
     environ[:cpu_threads] = msg.cpu_threads
     w.config.environ = environ

@@ -193,7 +193,8 @@ end
 
 function flush_gc_msgs()
     try
-        for w in (CTX.pgrp::ProcessGroup).workers
+        ctx = CTX[]
+        for w in (ctx.pgrp::ProcessGroup).workers
             if isa(w,Worker) && ((@atomic w.state) == WorkerState_connected) && w.gcflag
                 flush_gc_msgs(w)
             end
@@ -209,7 +210,7 @@ function send_connection_hdr(w::Worker, cookie=true)
     # else when we initiate a connection we first send the cookie followed by our version.
     # The remote side validates the cookie.
     if cookie
-        write(w.w_stream, CTX.lproc.cookie)
+        write(w.w_stream, CTX[].lproc.cookie)
     end
     write(w.w_stream, rpad(VERSION_STRING, HDR_VERSION_LEN)[1:HDR_VERSION_LEN])
 end

@@ -28,26 +28,28 @@ end
 ClusterSerializer(io::IO) = ClusterSerializer{typeof(io)}(io)
 
 function object_number(s::ClusterSerializer, @nospecialize(l))
-    if haskey(CTX.object_numbers, l)
-        return CTX.object_numbers[l]
+    ctx = CTX[]
+    if haskey(ctx.object_numbers, l)
+        return ctx.object_numbers[l]
     end
     # a hash function that always gives the same number to the same
     # object on the same machine, and is unique over all machines.
-    ln = CTX.obj_number_salt[]+(UInt64(myid())<<44)
-    CTX.obj_number_salt[] += 1
-    CTX.object_numbers[l] = ln
+    ln = ctx.obj_number_salt[]+(UInt64(myid())<<44)
+    ctx.obj_number_salt[] += 1
+    ctx.object_numbers[l] = ln
     return ln::UInt64
 end
 
 function lookup_object_number(s::ClusterSerializer, n::UInt64)
-    return get(CTX.known_object_data, n, nothing)
+    return get(CTX[].known_object_data, n, nothing)
 end
 
 function remember_object(s::ClusterSerializer, @nospecialize(o), n::UInt64)
-    CTX.known_object_data[n] = o
-    if isa(o, Core.TypeName) && !haskey(CTX.object_numbers, o)
+    ctx = CTX[]
+    ctx.known_object_data[n] = o
+    if isa(o, Core.TypeName) && !haskey(ctx.object_numbers, o)
         # set up reverse mapping for serialize
-        CTX.object_numbers[o] = n
+        ctx.object_numbers[o] = n
     end
     return nothing
 end

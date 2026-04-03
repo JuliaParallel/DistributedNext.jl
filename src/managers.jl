@@ -415,7 +415,7 @@ function manage(manager::SSHManager, id::Integer, config::WorkerConfig, op::Symb
 end
 
 # This is defined such that the port numbers start at 9201 and wrap around at 32,000
-next_tunnel_port() = (Threads.atomic_add!(CTX.tunnel_counter, 1) % 22_800) + 9200
+next_tunnel_port() = (Threads.atomic_add!(CTX[].tunnel_counter, 1) % 22_800) + 9200
 
 
 """
@@ -458,8 +458,10 @@ end
 # LocalManager
 struct LocalManager <: ClusterManager
     np::Int
-    restrict::Bool  # Restrict binding to 127.0.0.1 only
+    restrict::Bool    # Restrict binding to 127.0.0.1 only
+    in_process::Bool  # Run workers as tasks in the same process (internal)
 end
+LocalManager(np, restrict) = LocalManager(np, restrict, false)
 
 """
     addprocs(np::Integer=Sys.CPU_THREADS; restrict=true, kwargs...) -> List of process identifiers
@@ -495,7 +497,7 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
     dir = params[:dir]
     exename = params[:exename]
     exeflags = params[:exeflags]
-    bind_to = manager.restrict ? `127.0.0.1` : `$(CTX.lproc.bind_addr)`
+    bind_to = manager.restrict ? `127.0.0.1` : `$(CTX[].lproc.bind_addr)`
     env = Dict{String,String}(params[:env])
 
     # TODO: Maybe this belongs in base/initdefs.jl as a package_environment() function
@@ -527,13 +529,30 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
     end
 
     for i in 1:manager.np
-        cmd = `$(julia_cmd(exename)) $exeflags --bind-to $bind_to $(get_worker_arg())`
-        io = open(detach(setenv(addenv(cmd, env), dir=dir)), "r+")
-        write_cookie(io)
-
         wconfig = WorkerConfig()
-        wconfig.process = io
-        wconfig.io = io.out
+
+        if manager.in_process
+            cookie = cluster_cookie()
+            worker_ctx = ClusterContext()
+            worker_ctx.lproc.in_process = true
+            pipe = Pipe()
+            Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
+
+            task = Threads.@spawn @with CTX => worker_ctx begin
+                start_worker(pipe.in, cookie; close_stdin=false, stderr_to_stdout=false, exit_on_close=false)
+            end
+
+            wconfig.io = pipe.out
+            wconfig.userdata = (; ctx=worker_ctx, task, pipe)
+        else
+            cmd = `$(julia_cmd(exename)) $exeflags --bind-to $bind_to $(get_worker_arg())`
+            proc = open(detach(setenv(addenv(cmd, env), dir=dir)), "r+")
+
+            write_cookie(proc)
+            wconfig.io = proc.out
+            wconfig.process = proc
+        end
+
         wconfig.enable_threaded_blas = params[:enable_threaded_blas]
         push!(launched, wconfig)
     end
@@ -542,7 +561,7 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
 end
 
 function manage(manager::LocalManager, id::Integer, config::WorkerConfig, op::Symbol)
-    if op === :interrupt
+    if op === :interrupt && !manager.in_process
         kill(config.process::Process, 2)
     end
 end
@@ -622,10 +641,10 @@ function connect(manager::ClusterManager, pid::Int, config::WorkerConfig)
     end
 
     if tunnel
-        if !haskey(CTX.tunnel_hosts_map, pubhost)
-            CTX.tunnel_hosts_map[pubhost] = Semaphore(something(config.max_parallel, typemax(Int)))
+        if !haskey(CTX[].tunnel_hosts_map, pubhost)
+            CTX[].tunnel_hosts_map[pubhost] = Semaphore(something(config.max_parallel, typemax(Int)))
         end
-        sem = CTX.tunnel_hosts_map[pubhost]
+        sem = CTX[].tunnel_hosts_map[pubhost]
 
         sshflags = notnothing(config.sshflags)
         multiplex = something(config.multiplex, false)
@@ -690,9 +709,9 @@ end
 
 function bind_client_port(sock::TCPSocket, iptype)
     bind_host = iptype(0)
-    if Sockets.bind(sock, bind_host, CTX.client_port[])
+    if Sockets.bind(sock, bind_host, CTX[].client_port[])
         _addr, port = getsockname(sock)
-        CTX.client_port[] = port
+        CTX[].client_port[] = port
     end
     return sock
 end
@@ -756,16 +775,24 @@ function kill(manager::SSHManager, pid::Int, config::WorkerConfig)
 end
 
 function kill(manager::LocalManager, pid::Int, config::WorkerConfig; profile_wait = 6, exit_timeout = 15, term_timeout = 15)
+    if manager.in_process
+        (; ctx, task, pipe) = config.userdata
+        # Close the pipe, which causes the start_worker() task to exit
+        close(pipe)
+        wait(task)
+        close(ctx)
+        return nothing
+    end
+
     # profile_wait = 6 is 1s for profile, 5s for the report to show
     # First, try sending `exit()` to the remote over the usual control channels
     remote_do(exit, pid)
 
     timer_task = @async begin
-        sleep(exit_timeout)
+        process = config.process::Process
 
         # Check to see if our child exited, and if not, send an actual kill signal
-        process = config.process::Process
-        if !process_exited(process)
+        if timedwait(() -> process_exited(process), exit_timeout) === :timed_out
             @warn "Failed to gracefully kill worker $(pid)"
             profile_sig = Sys.iswindows() ? nothing : Sys.isbsd() ? ("SIGINFO", 29) : ("SIGUSR1" , 10)
             if profile_sig !== nothing
