@@ -174,8 +174,8 @@ function send_msg_(w::Worker, header, msg, now::Bool)
         wait(w.initialized)
     end
     io = w.w_stream
-    lock(io)
-    try
+
+    @lock io begin
         reset_state(w.w_serializer)
         serialize_hdr_raw(io, header)
         invokelatest(serialize_msg, w.w_serializer, msg)  # io is wrapped in w_serializer
@@ -186,8 +186,6 @@ function send_msg_(w::Worker, header, msg, now::Bool)
         else
             flush(io)
         end
-    finally
-        unlock(io)
     end
 end
 

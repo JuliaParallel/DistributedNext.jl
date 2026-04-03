@@ -157,7 +157,7 @@ mutable struct Worker
 end
 
 function set_worker_state(w, state)
-    lock(w.c_state) do
+    @lock w.c_state begin
         @atomic w.state = state
         notify(w.c_state; all=true)
     end
@@ -696,11 +696,9 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
         # require the value of config.connect_at which is set only upon connection completion
         for jw in CTX[].pgrp.workers
             if (jw.id != 1) && (jw.id < w.id)
-                lock(jw.c_state) do
+                @lock jw.c_state if (@atomic jw.state) === WorkerState_created
                     # wait for wl to join
-                    if (@atomic jw.state) === WorkerState_created
-                        wait(jw.c_state)
-                    end
+                    wait(jw.c_state)
                 end
                 push!(join_list, jw)
             end
@@ -724,11 +722,9 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
         end
 
         for wl in wlist
-            lock(wl.c_state) do
-                if (@atomic wl.state) === WorkerState_created
-                    # wait for wl to join
-                    wait(wl.c_state)
-                end
+            @lock wl.c_state if (@atomic wl.state) === WorkerState_created
+                # wait for wl to join
+                wait(wl.c_state)
             end
             push!(join_list, wl)
         end
@@ -749,9 +745,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
     if timedwait(() -> isready(rr_ntfy_join), timeout) === :timed_out
         error("worker did not connect within $timeout seconds")
     end
-    lock(CTX[].client_refs) do
-        delete!(CTX[].pgrp.refs, ntfy_oid)
-    end
+    @lock CTX[].client_refs delete!(CTX[].pgrp.refs, ntfy_oid)
 
     return w.id
 end
@@ -1399,8 +1393,7 @@ function rmprocs(pids...; waitfor=typemax(Int), callback_timeout=10)
 end
 
 function _rmprocs(pids, waitfor, callback_timeout)
-    lock(CTX[].worker_lock)
-    try
+    @lock CTX[].worker_lock begin
         # Run the callbacks
         callback_tasks = Tuple{Any, Task}[]
         for pid in pids
@@ -1440,8 +1433,6 @@ function _rmprocs(pids, waitfor, callback_timeout)
             estr = string("rmprocs: pids ", unremoved, " not terminated after ", waitfor, " seconds.")
             throw(ErrorException(estr))
         end
-    finally
-        unlock(CTX[].worker_lock)
     end
 end
 
@@ -1547,7 +1538,7 @@ function deregister_worker(pg, pid)
     # delete this worker from our remote reference client sets
     ids = []
     tonotify = []
-    lock(CTX[].client_refs) do
+    @lock CTX[].client_refs begin
         for (id, rv) in pg.refs
             if in(pid, rv.clientset)
                 push!(ids, id)

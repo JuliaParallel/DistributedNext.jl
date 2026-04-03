@@ -160,9 +160,7 @@ A low-level API which returns the backing `AbstractChannel` for an `id` returned
 The call is valid only on the node where the backing channel exists.
 """
 function channel_from_id(id)
-    rv = lock(CTX[].client_refs) do
-        return get(CTX[].pgrp.refs, id, false)
-    end
+    rv = @lock CTX[].client_refs get(CTX[].pgrp.refs, id, false)
     if rv === false
         throw(ErrorException("Local instance of remote reference not found"))
     end
@@ -171,7 +169,7 @@ end
 
 lookup_ref(rrid::RRID, f=def_rv_channel) = lookup_ref(CTX[].pgrp, rrid, f)
 function lookup_ref(pg, rrid, f)
-    return lock(CTX[].client_refs) do
+    rv = @lock CTX[].client_refs begin
         rv = get(pg.refs, rrid, false)
         if rv === false
             # first we've heard of this ref
@@ -179,8 +177,10 @@ function lookup_ref(pg, rrid, f)
             pg.refs[rrid] = rv
             push!(rv.clientset, rrid.whence)
         end
-        return rv
+        rv
     end::RemoteValue
+
+    return rv
 end
 
 """
@@ -232,9 +232,7 @@ del_client(rr::AbstractRemoteRef) = del_client(remoteref_id(rr), myid())
 
 del_client(id, client) = del_client(CTX[].pgrp, id, client)
 function del_client(pg, id, client)
-    lock(CTX[].client_refs) do
-        _del_client(pg, id, client)
-    end
+    @lock CTX[].client_refs _del_client(pg, id, client)
     nothing
 end
 
@@ -297,13 +295,11 @@ function send_del_client_no_lock(rr)
 end
 
 function publish_del_msg!(w::Worker, msg)
-    lock(w.msg_lock) do
+    @lock w.msg_lock begin
         push!(w.del_msgs, msg)
         @atomic w.gcflag = true
     end
-    lock(CTX[].any_gc_flag) do
-        notify(CTX[].any_gc_flag)
-    end
+    @lock CTX[].any_gc_flag notify(CTX[].any_gc_flag)
 end
 
 function process_worker(rr)
@@ -320,7 +316,7 @@ function process_worker(rr)
 end
 
 function add_client(id, client)
-    lock(CTX[].client_refs) do
+    @lock CTX[].client_refs begin
         rv = lookup_ref(id)
         push!(rv.clientset, client)
     end
@@ -341,13 +337,11 @@ function send_add_client(rr::AbstractRemoteRef, i)
         # to the processor that owns the remote ref. it will add_client
         # itself inside deserialize().
         w = worker_from_id(rr.where)
-        lock(w.msg_lock) do
+        @lock w.msg_lock begin
             push!(w.add_msgs, (remoteref_id(rr), i))
             @atomic w.gcflag = true
         end
-        lock(CTX[].any_gc_flag) do
-            notify(CTX[].any_gc_flag)
-        end
+        @lock CTX[].any_gc_flag notify(CTX[].any_gc_flag)
     end
 end
 
@@ -448,9 +442,7 @@ function remotecall_fetch(f, w::Worker, args...; kwargs...)
     rv.waitingfor = w.id
     send_msg(w, MsgHeader(RRID(0,0), oid), CallMsg{:call_fetch}(f, args, kwargs))
     v = take!(rv)
-    lock(CTX[].client_refs) do
-        delete!(CTX[].pgrp.refs, oid)
-    end
+    @lock CTX[].client_refs delete!(CTX[].pgrp.refs, oid)
     return isa(v, RemoteException) ? throw(v) : v
 end
 
@@ -490,9 +482,7 @@ function remotecall_wait(f, w::Worker, args...; kwargs...)
     rr = Future(w)
     send_msg(w, MsgHeader(remoteref_id(rr), prid), CallWaitMsg(f, args, kwargs))
     v = fetch(rv.c)
-    lock(CTX[].client_refs) do
-        delete!(CTX[].pgrp.refs, prid)
-    end
+    @lock CTX[].client_refs delete!(CTX[].pgrp.refs, prid)
     isa(v, RemoteException) && throw(v)
     return rr
 end
