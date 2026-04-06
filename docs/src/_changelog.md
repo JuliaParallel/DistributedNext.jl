@@ -7,7 +7,7 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
-## Unreleased
+## [v1.3.0] - 2026-04-06
 
 ### Changed
 - The internals were completely refactored to move all global variables into a
