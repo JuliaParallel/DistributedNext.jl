@@ -367,7 +367,7 @@ function handle_msg(msg::JoinPGRPMsg, header, r_stream, w_stream, version)
     send_msg_now(controller, MsgHeader(RRID(0,0), header.notify_oid), JoinCompleteMsg(Sys.CPU_THREADS, getpid()))
 end
 
-function connect_to_peer(manager::ClusterManager, rpid::Int, wconfig::WorkerConfig)
+function connect_to_peer(manager, rpid::Int, wconfig::WorkerConfig)
     try
         (r_s, w_s) = connect(manager, rpid, wconfig)
         w = Worker(rpid, r_s, w_s, manager; config=wconfig)::Worker

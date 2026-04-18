@@ -171,7 +171,7 @@ include("managers.jl")    # LocalManager and SSHManager
     worker_exited_callbacks::Dict{Any, Base.Callable} = Dict{Any, Base.Callable}()
 
     # Cluster manager
-    cluster_manager::Ref{ClusterManager} = Ref{ClusterManager}()
+    cluster_manager::Ref{Any} = Ref{Any}()
 
     # Synchronization
     worker_lock::ReentrantLock = ReentrantLock()

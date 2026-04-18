@@ -568,7 +568,7 @@ function manage(manager::LocalManager, id::Integer, config::WorkerConfig, op::Sy
 end
 
 """
-    launch(manager::ClusterManager, params::Dict, launched::Array, launch_ntfy::Condition)
+    launch(manager, params::Dict, launched::Array, launch_ntfy::Condition)
 
 Implemented by cluster managers. For every Julia worker launched by this function, it should
 append a `WorkerConfig` entry to `launched` and notify `launch_ntfy`. The function MUST exit
@@ -578,7 +578,7 @@ keyword arguments [`addprocs`](@ref) was called with.
 launch
 
 """
-    manage(manager::ClusterManager, id::Integer, config::WorkerConfig. op::Symbol)
+    manage(manager, id::Integer, config::WorkerConfig, op::Symbol)
 
 Implemented by cluster managers. It is called on the master process, during a worker's
 lifetime, with appropriate `op` values:
@@ -597,17 +597,17 @@ end
 
 
 """
-    connect(manager::ClusterManager, pid::Int, config::WorkerConfig) -> (instrm::IO, outstrm::IO)
+    connect(manager, pid::Int, config::WorkerConfig) -> (instrm::IO, outstrm::IO)
 
 Implemented by cluster managers using custom transports. It should establish a logical
 connection to worker with id `pid`, specified by `config` and return a pair of `IO`
 objects. Messages from `pid` to current process will be read off `instrm`, while messages to
 be sent to `pid` will be written to `outstrm`. The custom transport implementation must
 ensure that messages are delivered and received completely and in order.
-`connect(manager::ClusterManager.....)` sets up TCP/IP socket connections in-between
+`connect(manager, ...)` sets up TCP/IP socket connections in-between
 workers.
 """
-function connect(manager::ClusterManager, pid::Int, config::WorkerConfig)
+function connect(manager, pid::Int, config::WorkerConfig)
     if config.connect_at !== nothing
         # this is a worker-to-worker setup call.
         return connect_w2w(pid, config)
@@ -756,15 +756,16 @@ end
 
 
 """
-    kill(manager::ClusterManager, pid::Int, config::WorkerConfig)
+    kill(manager, pid::Int, config::WorkerConfig)
 
 Implemented by cluster managers.
 It is called on the master process, by [`rmprocs`](@ref).
 It should cause the remote worker specified by `pid` to exit.
-`kill(manager::ClusterManager.....)` executes a remote `exit()`
+`kill(manager, ...)` executes a remote `exit()`
 on `pid`.
 """
-function kill(manager::ClusterManager, pid::Int, config::WorkerConfig)
+function kill(manager, pid::Int, config::WorkerConfig)
+    check_cluster_manager(manager)
     remote_do(exit, pid)
     nothing
 end
