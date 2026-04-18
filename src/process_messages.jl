@@ -125,11 +125,11 @@ end
 function process_tcp_streams(r_stream::TCPSocket, w_stream::TCPSocket, incoming::Bool)
     Sockets.nagle(r_stream, false)
     Sockets.quickack(r_stream, true)
-    wait_connected(r_stream)
+    Sockets.wait_connected(r_stream)
     if r_stream != w_stream
         Sockets.nagle(w_stream, false)
         Sockets.quickack(w_stream, true)
-        wait_connected(w_stream)
+        Sockets.wait_connected(w_stream)
     end
     message_handler_loop(r_stream, w_stream, incoming)
 end

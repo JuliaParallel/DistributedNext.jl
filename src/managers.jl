@@ -729,7 +729,7 @@ function connect_to_worker(host::AbstractString, port::Integer)
 
     iptype = typeof(bind_addr)
     sock = socket_reuse_port(iptype)
-    connect(sock, bind_addr, UInt16(port))
+    Sockets.connect(sock, bind_addr, UInt16(port))
 
     (sock, string(bind_addr))
 end
@@ -737,7 +737,7 @@ end
 
 function connect_to_worker_with_tunnel(host::AbstractString, bind_addr::AbstractString, port::Integer, tunnel_user::AbstractString, sshflags, multiplex)
     localport = ssh_tunnel(tunnel_user, host, bind_addr, UInt16(port), sshflags, multiplex)
-    s = connect("localhost", localport)
+    s = Sockets.connect("localhost", localport)
     forward = "$localport:$bind_addr:$port"
     (s, bind_addr, forward)
 end

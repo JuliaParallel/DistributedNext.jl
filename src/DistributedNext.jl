@@ -21,7 +21,6 @@ using Base.Threads: Event
 
 using Serialization, Sockets
 import Serialization: serialize, deserialize
-import Sockets: connect, wait_connected
 
 @static if VERSION < v"1.11"
     using ScopedValues: ScopedValue, @with
