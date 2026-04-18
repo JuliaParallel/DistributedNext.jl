@@ -85,7 +85,6 @@ DistributedNext.manage
 DistributedNext.kill(::ClusterManager, ::Int, ::WorkerConfig)
 DistributedNext.connect(::ClusterManager, ::Int, ::WorkerConfig)
 DistributedNext.init_worker
-DistributedNext.start_worker
 DistributedNext.process_messages
 DistributedNext.default_addprocs_params
 ```
