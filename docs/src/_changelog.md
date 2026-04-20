@@ -7,6 +7,14 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [v1.3.1] - 2026-04-20
+
+### Changed
+- Fixed an incorrect assumption in `start_worker` that the loopback `bind_addr`
+  would be IPv4, which is untrue on macOS. This fixes silent hangs during
+  precompile on macOS, and also ensures `start_worker` errors are properly
+  reported ([#68]).
+
 ## [v1.3.0] - 2026-04-06
 
 ### Changed

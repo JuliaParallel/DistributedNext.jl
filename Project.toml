@@ -1,6 +1,6 @@
 name = "DistributedNext"
 uuid = "fab6aee4-877b-4bac-a744-3eca44acbb6f"
-version = "1.3.0"
+version = "1.3.1"
 
 [deps]
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
