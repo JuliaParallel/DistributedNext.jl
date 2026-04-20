@@ -271,7 +271,7 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
     stderr_to_stdout && redirect_stderr(stdout)
 
     init_worker(cookie)
-    interface = IPv4(CTX[].lproc.bind_addr)
+    interface = parse(IPAddr, CTX[].lproc.bind_addr)
     if CTX[].lproc.bind_port == 0
         (port, sock) = listenany(interface, CTX[].lproc.bind_port_hint)
         CTX[].lproc.bind_port = Int(port)
