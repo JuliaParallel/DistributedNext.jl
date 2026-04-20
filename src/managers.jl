@@ -541,6 +541,7 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
             task = Threads.@spawn @with CTX => worker_ctx begin
                 start_worker(pipe.in, cookie; close_stdin=false, stderr_to_stdout=false, exit_on_close=false)
             end
+            errormonitor(task)
 
             wconfig.io = pipe.out
             wconfig.userdata = (; ctx=worker_ctx, task, pipe)
