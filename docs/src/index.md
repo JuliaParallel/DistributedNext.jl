@@ -79,13 +79,13 @@ and transport messages between processes. It is possible for Cluster Managers to
 
 ```@docs
 DistributedNext.ClusterManager
+DistributedNext.is_cluster_manager
 DistributedNext.WorkerConfig
 DistributedNext.launch
 DistributedNext.manage
-DistributedNext.kill(::ClusterManager, ::Int, ::WorkerConfig)
-DistributedNext.connect(::ClusterManager, ::Int, ::WorkerConfig)
+DistributedNext.kill(::Any, ::Int, ::WorkerConfig)
+DistributedNext.connect(::Any, ::Int, ::WorkerConfig)
 DistributedNext.init_worker
-DistributedNext.start_worker
 DistributedNext.process_messages
 DistributedNext.default_addprocs_params
 ```

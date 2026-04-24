@@ -26,3 +26,13 @@ using DistributedNext: parse_machine, SSHManager, LocalManager
                    sprint((t,x) -> show(t, "text/plain", x), SSHManager("127.0.0.1")))
     @test sprint((t,x) -> show(t, "text/plain", x), LocalManager(1, true)) == "LocalManager()"
 end
+
+@testset "is_cluster_manager trait" begin
+    # Subtypes of ClusterManager opt in automatically
+    @test DistributedNext.is_cluster_manager(LocalManager(1, true))
+
+    # Arbitrary types do not and cause exceptions
+    struct NotAManager end
+    @test !DistributedNext.is_cluster_manager(NotAManager())
+    @test_throws ArgumentError DistributedNext.addprocs(NotAManager())
+end
