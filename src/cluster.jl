@@ -6,8 +6,45 @@
 Supertype for cluster managers, which control workers processes as a cluster.
 Cluster managers implement how workers can be added, removed and communicated with.
 `SSHManager` and `LocalManager` are subtypes of this.
+
+!!! note
+    Subtyping `ClusterManager` is no longer required. DistributedNext now
+    uses the [`is_cluster_manager`](@ref) trait to recognise cluster managers,
+    so any type can opt in by defining `DistributedNext.is_cluster_manager(::MyMgr) = true`.
+    `ClusterManager` is kept for backward compatibility; a subtype is automatically
+    recognised as a cluster manager via a trait fallback.
 """
 abstract type ClusterManager end
+
+"""
+    is_cluster_manager(x) -> Bool
+
+Trait identifying `x` as a cluster manager. Defaults to `false`. Cluster
+managers opt in by defining a method returning `true`:
+
+```julia
+DistributedNext.is_cluster_manager(::MyManager) = true
+```
+
+Any subtype of [`ClusterManager`](@ref) is automatically recognised via a
+fallback method. Defining this trait does *not* require subtyping
+`ClusterManager`, which lets external types (for example, types already
+subtyping `Distributed.ClusterManager`) act as DistributedNext cluster
+managers without multiple inheritance.
+"""
+is_cluster_manager(::Any) = false
+is_cluster_manager(::ClusterManager) = true
+
+# Throw an ArgumentError unless `manager` has opted into the cluster-manager
+# trait. Used by entry points accepting user-supplied managers so we fail early
+# with a clear message.
+function check_cluster_manager(manager)
+    if !is_cluster_manager(manager)
+        throw(ArgumentError("$(typeof(manager)) is not recognised as a cluster manager. " *
+                            "Define `DistributedNext.is_cluster_manager(::$(typeof(manager))) = true` " *
+                            "to opt in."))
+    end
+end
 
 function throw_if_cluster_manager_unassigned()
     isassigned(CTX[].cluster_manager) || error("cluster_manager is unassigned")
@@ -121,12 +158,12 @@ mutable struct Worker
     w_stream::IO
     w_serializer::ClusterSerializer  # writes can happen from any task hence store the
                                      # serializer as part of the Worker object
-    manager::ClusterManager
+    manager::Any
     config::WorkerConfig
     version::Union{VersionNumber, Nothing}   # Julia version of the remote process
     initialized::Event
 
-    function Worker(id::Int, r_stream::IO, w_stream::IO, manager::ClusterManager;
+    function Worker(id::Int, r_stream::IO, w_stream::IO, manager;
                              version::Union{VersionNumber, Nothing}=nothing,
                              config::WorkerConfig=WorkerConfig())
         w = Worker(id)
@@ -404,14 +441,14 @@ function parse_connection_info(str)
 end
 
 """
-    init_worker(cookie::AbstractString, manager::ClusterManager=DefaultClusterManager())
+    init_worker(cookie::AbstractString, manager=DefaultClusterManager())
 
 Called by cluster managers implementing custom transports. It initializes a newly launched
 process as a worker. Command line argument `--worker[=<cookie>]` has the effect of initializing a
 process as a worker using TCP/IP sockets for transport.
 `cookie` is a [`cluster_cookie`](@ref).
 """
-function init_worker(cookie::AbstractString, manager::ClusterManager=DefaultClusterManager())
+function init_worker(cookie::AbstractString, manager=DefaultClusterManager())
     myrole!(:worker)
 
     # On workers, the default cluster manager connects via TCP sockets. Custom
@@ -440,7 +477,7 @@ end
 # Only one addprocs can be in progress at any time
 #
 """
-    addprocs(manager::ClusterManager; kwargs...) -> List of process identifiers
+    addprocs(manager; kwargs...) -> List of process identifiers
 
 Launches worker processes via the specified cluster manager.
 
@@ -479,7 +516,8 @@ if istaskdone(t)   # Check if `addprocs` has completed to ensure `fetch` doesn't
 end
 ```
 """
-function addprocs(manager::ClusterManager; kwargs...)
+function addprocs(manager; kwargs...)
+    check_cluster_manager(manager)
     params = merge(default_addprocs_params(manager), Dict{Symbol, Any}(kwargs))
 
     init_multi()
@@ -492,7 +530,7 @@ function addprocs(manager::ClusterManager; kwargs...)
                                 warning_interval, [(manager, params)])
 
     # Add new workers
-    new_workers = @lock CTX[].worker_lock addprocs_locked(manager::ClusterManager, params)
+    new_workers = @lock CTX[].worker_lock addprocs_locked(manager, params)
 
     # Call worker-started callbacks
     _run_callbacks_concurrently("worker-started", CTX[].worker_started_callbacks,
@@ -501,7 +539,7 @@ function addprocs(manager::ClusterManager; kwargs...)
     return new_workers
 end
 
-function addprocs_locked(manager::ClusterManager, params)
+function addprocs_locked(manager, params)
     topology(Symbol(params[:topology]))
 
     if CTX[].pgrp.topology !== :all_to_all
@@ -574,13 +612,13 @@ function set_valid_processes(plist::Array{Int})
 end
 
 """
-    default_addprocs_params(mgr::ClusterManager) -> Dict{Symbol, Any}
+    default_addprocs_params(mgr) -> Dict{Symbol, Any}
 
 Implemented by cluster managers. The default keyword parameters passed when calling
 `addprocs(mgr)`. The minimal set of options is available by calling
 `default_addprocs_params()`
 """
-default_addprocs_params(::ClusterManager) = default_addprocs_params()
+default_addprocs_params(_) = default_addprocs_params()
 default_addprocs_params() = Dict{Symbol,Any}(
     :topology => :all_to_all,
     :dir      => pwd(),
@@ -639,7 +677,7 @@ function launch_n_additional_processes(manager, frompid, fromconfig, cnt, launch
     end
 end
 
-function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
+function create_worker(manager, wconfig::WorkerConfig)
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert CTX[].lproc.id == 1
     timeout = worker_timeout()

@@ -7,6 +7,14 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## Unreleased
+
+### Changed
+- DistributedNext no longer requires cluster managers implementations to subtype
+  the [`ClusterManager`](@ref) type, instead cluster manager support can be
+  implemented using trait methods ([#67]). This was done to allow existing
+  cluster managers to keep supporting both Distributed and DistributedNext.
+
 ## [v1.3.1] - 2026-04-20
 
 ### Changed
