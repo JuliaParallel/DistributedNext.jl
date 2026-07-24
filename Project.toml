@@ -18,8 +18,9 @@ ReviseExt = "Revise"
 [compat]
 Aqua = "0.8"
 Distributed = "1"
-LibSSH = "0.7"
+LibSSH = "1"
 LinearAlgebra = "1"
+Pkg = "1"
 PrecompileTools = "1"
 Random = "1"
 Revise = "3.7.0"
@@ -34,7 +35,8 @@ Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 LibSSH = "00483490-30f8-4353-8aba-35b82f51f4d0"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "Distributed", "LibSSH", "LinearAlgebra", "Revise", "Test"]
+test = ["Aqua", "Distributed", "LinearAlgebra", "Pkg", "Revise", "Test"]

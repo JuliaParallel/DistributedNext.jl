@@ -726,13 +726,14 @@ end
     wp = WorkerPool(workers())
     @test nworkers() == length(unique(pmap(_->myid(), wp, 1:100)))
     @test nworkers() == length(unique(remotecall_fetch(wp->pmap(_->myid(), wp, 1:100), id_other, wp)))
-    wp = WorkerPool(2:3)
-    @test sort(unique(pmap(_->myid(), wp, 1:100))) == [2,3]
+    two_workers = sort(workers())[1:2]
+    wp = WorkerPool(two_workers)
+    @test sort(unique(pmap(_->myid(), wp, 1:100))) == two_workers
     @test fetch(remotecall(myid, wp)) in wp.workers
     @test_throws RemoteException fetch(remotecall(error, wp))
 
     # wait on worker pool
-    wp = WorkerPool(2:2)
+    wp = WorkerPool(two_workers[1:1])
     w = take!(wp)
 
     # local call to _wait
@@ -987,14 +988,14 @@ f16091b = () -> 1
 
     # these will only heisen-fail, since it depends on the gensym counter collisions:
     remotecall_fetch(()->eval(:(f16091b = () -> 2)), wid)
-    @test remotecall_fetch(f16091b, 2) === 1
+    @test remotecall_fetch(f16091b, wid) === 1
     # Global anonymous functions are over-written...
     @test remotecall_fetch((myid)->remotecall_fetch(f16091b, myid), wid, myid()) === 1
 
     # ...while local anonymous functions are by definition, local.
     let
         f16091c = () -> 1
-        @test remotecall_fetch(f16091c, 2) === 1
+        @test remotecall_fetch(f16091c, wid) === 1
         @test remotecall_fetch(
             myid -> begin
                 let
@@ -1032,14 +1033,14 @@ f16091b = () -> 1
     # Deserialization error recovery test
     # locally defined module, but unavailable on workers
     let
-        @test_throws RemoteException remotecall_fetch(()->LocalFoo.foo, 2)
+        @test_throws RemoteException remotecall_fetch(()->LocalFoo.foo, wrkr1)
 
         bad_thunk = ()->NonexistentModule.f()
-        @test_throws RemoteException remotecall_fetch(bad_thunk, 2)
+        @test_throws RemoteException remotecall_fetch(bad_thunk, wrkr1)
 
         # Test that the stream is still usable
-        @test remotecall_fetch(()->:test,2) === :test
-        ref = remotecall(bad_thunk, 2)
+        @test remotecall_fetch(()->:test, wrkr1) === :test
+        ref = remotecall(bad_thunk, wrkr1)
         @test_throws RemoteException fetch(ref)
     end
 
@@ -1483,7 +1484,7 @@ v2669=10
 
     let thrown = false
         try
-            remotecall_fetch(sqrt, 2, -1)
+            remotecall_fetch(sqrt, workers()[1], -1)
         catch e
             thrown = true
             local b = IOBuffer()
