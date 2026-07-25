@@ -1,12 +1,13 @@
 using Test
 using DistributedNext
-import Sockets: getipaddr, listenany
+using Sockets: getipaddr, listenany
 
-import LibSSH as ssh
-import LibSSH.Demo: DemoServer
+# We install LibSSH manually because having it in Project.toml won't resolve on
+# Julia 1.10.
+import Pkg
+Pkg.add("LibSSH")
+using LibSSH: LibSSH as ssh, DemoServer
 
-
-include(joinpath(Sys.BINDIR, "..", "share", "julia", "test", "testenv.jl"))
 
 function test_n_remove_pids(new_pids)
     for p in new_pids
