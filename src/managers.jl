@@ -497,7 +497,7 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
     dir = params[:dir]
     exename = params[:exename]
     exeflags = params[:exeflags]
-    bind_to = manager.restrict ? `127.0.0.1` : `$(CTX[].lproc.bind_addr)`
+    bind_addr = manager.restrict ? "127.0.0.1" : CTX[].lproc.bind_addr
     env = Dict{String,String}(params[:env])
 
     # TODO: Maybe this belongs in base/initdefs.jl as a package_environment() function
@@ -539,14 +539,15 @@ function launch(manager::LocalManager, params::Dict, launched::Array, c::Conditi
             Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
 
             task = Threads.@spawn @with CTX => worker_ctx begin
-                start_worker(pipe.in, cookie; close_stdin=false, stderr_to_stdout=false, exit_on_close=false)
+                start_worker(pipe.in, cookie; close_stdin=false, stderr_to_stdout=false,
+                             exit_on_close=false, bind_addr)
             end
             errormonitor(task)
 
             wconfig.io = pipe.out
             wconfig.userdata = (; ctx=worker_ctx, task, pipe)
         else
-            cmd = `$(julia_cmd(exename)) $exeflags --bind-to $bind_to $(get_worker_arg())`
+            cmd = `$(julia_cmd(exename)) $exeflags --bind-to $bind_addr $(get_worker_arg())`
             proc = open(detach(setenv(addenv(cmd, env), dir=dir)), "r+")
 
             write_cookie(proc)
