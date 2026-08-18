@@ -7,6 +7,12 @@ CurrentModule = DistributedNext
 This documents notable changes in DistributedNext.jl. The format is based on
 [Keep a Changelog](https://keepachangelog.com).
 
+## [v1.3.2] - 2026-08-18
+
+### Fixed
+- Fixed the precompilation workload to always use the loopback address, which
+  could otherwise cause errors on some systems ([#74]).
+
 ## [v1.3.1] - 2026-04-20
 
 ### Changed

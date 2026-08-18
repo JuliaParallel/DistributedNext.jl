@@ -240,7 +240,8 @@ worker_timeout() = parse(Float64, get(ENV, "JULIA_WORKER_TIMEOUT", "60.0"))
 
 ## worker creation and setup ##
 """
-    start_worker([out::IO=stdout], cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+    start_worker([out::IO=stdout], cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true,
+                 exit_on_close::Bool=true, bind_addr=nothing)
 
 `start_worker` is an internal function which is the default entry point for
 worker processes connecting via TCP/IP. It sets up the process as a Julia cluster
@@ -253,7 +254,8 @@ The function reads the cookie from stdin if required, and  listens on a free por
 tasks to process incoming TCP connections and requests. It also (optionally)
 closes stdin and redirects stderr to stdout.
 
-If a specific interface is not specified through `--bind-to` it will make a
+The interface to listen on is taken from `bind_addr` if it is set, otherwise
+from the `--bind-to` command line option. If neither is given it will make a
 best-effort attempt to pick the fastest available network interface to listen
 on. The heuristics it uses for this depend on the system configuration and
 should not be relied upon to always pick the fastest interface.
@@ -261,7 +263,8 @@ should not be relied upon to always pick the fastest interface.
 It does not return.
 """
 start_worker(cookie::AbstractString=readline(stdin); kwargs...) = start_worker(stdout, cookie; kwargs...)
-function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true, exit_on_close::Bool=true)
+function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true,
+                      exit_on_close::Bool=true, bind_addr=nothing)
     init_multi()
 
     if close_stdin # workers will not use it
@@ -271,6 +274,9 @@ function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_std
     stderr_to_stdout && redirect_stderr(stdout)
 
     init_worker(cookie)
+    if !isnothing(bind_addr)
+        CTX[].lproc.bind_addr = bind_addr
+    end
     interface = parse(IPAddr, CTX[].lproc.bind_addr)
     if CTX[].lproc.bind_port == 0
         (port, sock) = listenany(interface, CTX[].lproc.bind_port_hint)
