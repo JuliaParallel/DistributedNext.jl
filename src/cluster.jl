@@ -1656,7 +1656,7 @@ function terminate_all_workers()
     end
 end
 
-function choose_bind_addr()
+function possible_bind_interfaces()
     # We prefer IPv4 over IPv6.
     #
     # We also prefer non-link-local over link-local.
@@ -1668,14 +1668,24 @@ function choose_bind_addr()
     # 2. Non-link-local IPv6
     # 3. Link-local IPv4
     # 4. Link-local IPv6
-    addrs = getipaddrs()
-    i = something(
-        findfirst(ip -> !islinklocaladdr(ip) && ip isa IPv4, addrs), # first non-link-local IPv4
-        findfirst(ip -> !islinklocaladdr(ip) && ip isa IPv6, addrs), # first non-link-local IPv6
-        findfirst(ip -> ip isa IPv4, addrs), # first IPv4
-        findfirst(ip -> ip isa IPv6, addrs), # first IPv6
-    )
-    return addrs[i]
+    interfaces = _get_interfaces()
+    ipv4_nonlinklocal = filter(i -> !islinklocaladdr(i.ip) && i.ip isa IPv4, interfaces) # non-link-local IPv4
+    ipv6_nonlinklocal = filter(i -> !islinklocaladdr(i.ip) && i.ip isa IPv6, interfaces) # non-link-local IPv6
+    ipv4 = filter(i -> i.ip isa IPv4, interfaces) # IPv4
+    ipv6 = filter(i -> i.ip isa IPv6, interfaces) # IPv6
+    if !isempty(ipv4_nonlinklocal)
+        return ipv4_nonlinklocal
+    end
+    if !isempty(ipv6_nonlinklocal)
+        return ipv6_nonlinklocal
+    end
+    if !isempty(ipv4)
+        return ipv4
+    end
+    if !isempty(ipv6)
+        return ipv6
+    end
+    return Interface[]
 end
 
 # initialize the local proc network address / port
@@ -1699,12 +1709,10 @@ function init_bind_addr()
             end
         end
     else
-        bind_port = 0
-        try
-            bind_addr = string(choose_bind_addr())
-        catch
-            # All networking is unavailable, initialize bind_addr to the loopback address
-            # Will cause an exception to be raised only when used.
+        interfaces = possible_bind_interfaces()
+        if isempty(interfaces)
+            # All networking is unavailable, initialize bind_addr to the loopback address.
+            # An exception will be raised later if even that is unavailable.
             bind_addr = "127.0.0.1"
         else
             # Pick the interface with the highest negotiated speed, if any
