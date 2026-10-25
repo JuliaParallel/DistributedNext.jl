@@ -718,7 +718,7 @@ function create_worker(manager::ClusterManager, wconfig::WorkerConfig)
         wlist = filter(filterfunc, CTX[].pgrp.workers)
         waittime = 0
         while wconfig.connect_idents !== nothing &&
-              length(wlist) < length(wconfig.connect_idents)
+              length(wlist) < length(wconfig.connect_idents::Array)
             if waittime >= timeout
                 error("peer workers did not connect within $timeout seconds")
             end
