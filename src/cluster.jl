@@ -1656,6 +1656,38 @@ function terminate_all_workers()
     end
 end
 
+function possible_bind_interfaces()
+    # We prefer IPv4 over IPv6.
+    #
+    # We also prefer non-link-local over link-local.
+    # (This is because on HPC clusters, link-local addresses are usually not
+    # usable for communication between compute nodes.
+    #
+    # Therefore, our order of preference is:
+    # 1. Non-link-local IPv4
+    # 2. Non-link-local IPv6
+    # 3. Link-local IPv4
+    # 4. Link-local IPv6
+    interfaces = _get_interfaces()
+    ipv4_nonlinklocal = filter(i -> !islinklocaladdr(i.ip) && i.ip isa IPv4, interfaces) # non-link-local IPv4
+    ipv6_nonlinklocal = filter(i -> !islinklocaladdr(i.ip) && i.ip isa IPv6, interfaces) # non-link-local IPv6
+    ipv4 = filter(i -> i.ip isa IPv4, interfaces) # IPv4
+    ipv6 = filter(i -> i.ip isa IPv6, interfaces) # IPv6
+    if !isempty(ipv4_nonlinklocal)
+        return ipv4_nonlinklocal
+    end
+    if !isempty(ipv6_nonlinklocal)
+        return ipv6_nonlinklocal
+    end
+    if !isempty(ipv4)
+        return ipv4
+    end
+    if !isempty(ipv6)
+        return ipv6
+    end
+    return Interface[]
+end
+
 # initialize the local proc network address / port
 function init_bind_addr()
     opts = JLOptions()
@@ -1677,12 +1709,7 @@ function init_bind_addr()
             end
         end
     else
-        interfaces = _get_interfaces(IPv4)
-        if isempty(interfaces)
-            # Include IPv6 interfaces if there are no IPv4 ones
-            interfaces = _get_interfaces()
-        end
-
+        interfaces = possible_bind_interfaces()
         if isempty(interfaces)
             # All networking is unavailable, initialize bind_addr to the loopback address.
             # An exception will be raised later if even that is unavailable.
